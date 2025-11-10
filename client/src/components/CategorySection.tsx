@@ -20,7 +20,7 @@ interface Recipe {
 interface CategorySectionProps {
   category: string;
   recipes: Recipe[];
-  icon?: string;
+  icon?: React.ReactNode;
   defaultOpen?: boolean;
   onRecipeClick: (id: string) => void;
 }
@@ -28,7 +28,7 @@ interface CategorySectionProps {
 export function CategorySection({
   category,
   recipes,
-  icon = "◆",
+  icon,
   defaultOpen = false,
   onRecipeClick,
 }: CategorySectionProps) {
@@ -40,7 +40,7 @@ export function CategorySection({
           data-testid={`category-${category.toLowerCase()}`}
         >
           <div className="flex items-center gap-3 cookbook-corner">
-            <span className="text-primary text-xl">{icon}</span>
+            {icon && <span className="text-primary">{icon}</span>}
             <span className="font-serif text-xl font-semibold">{category}</span>
             <span className="text-sm text-muted-foreground ml-auto mr-2">
               ({recipes.length})

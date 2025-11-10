@@ -1,4 +1,5 @@
 import { CategorySection } from "../CategorySection";
+import { Cake } from "lucide-react";
 import cookiesImage from "@assets/generated_images/chocolate_chip_cookies_recipe_2fbf360c.png";
 import pastaImage from "@assets/generated_images/pasta_carbonara_recipe_image_0e830503.png";
 
@@ -29,7 +30,7 @@ export default function CategorySectionExample() {
       <CategorySection
         category="Desserts"
         recipes={recipes}
-        icon="🍰"
+        icon={<Cake className="w-5 h-5" />}
         defaultOpen={true}
         onRecipeClick={(id) => console.log("Recipe clicked:", id)}
       />

@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Printer, Download } from "lucide-react";
+import { Printer, Scale, Utensils, Coffee, Cake, Salad, Book } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/SearchBar";
 import { EmptyState } from "@/components/EmptyState";
@@ -8,7 +8,6 @@ import { CategorySection } from "@/components/CategorySection";
 import { AdvancedFilters, type FilterState } from "@/components/AdvancedFilters";
 import { MeasurementConverter } from "@/components/MeasurementConverter";
 import { useLocation } from "wouter";
-import { exportRecipesAsPdf } from "@/utils/exportPdf";
 import cookiesImage from "@assets/generated_images/chocolate_chip_cookies_recipe_2fbf360c.png";
 import pastaImage from "@assets/generated_images/pasta_carbonara_recipe_image_0e830503.png";
 import saladImage from "@assets/generated_images/fresh_garden_salad_recipe_a3153931.png";
@@ -125,12 +124,12 @@ export default function RecipesList() {
     return groups;
   }, [filteredRecipes]);
 
-  const categoryIcons: Record<string, string> = {
-    Breakfast: "🍳",
-    "Main Courses": "🍽️",
-    Desserts: "🍰",
-    Salads: "🥗",
-    Uncategorized: "📖",
+  const categoryIcons: Record<string, React.ReactNode> = {
+    Breakfast: <Coffee className="w-5 h-5" />,
+    "Main Courses": <Utensils className="w-5 h-5" />,
+    Desserts: <Cake className="w-5 h-5" />,
+    Salads: <Salad className="w-5 h-5" />,
+    Uncategorized: <Book className="w-5 h-5" />,
   };
 
   return (
@@ -149,16 +148,7 @@ export default function RecipesList() {
                 title="Measurement Converter"
                 data-testid="button-toggle-converter"
               >
-                <span className="text-lg">⚖️</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={exportRecipesAsPdf}
-                title="Export as PDF"
-                data-testid="button-export-pdf"
-              >
-                <Download className="w-5 h-5" />
+                <Scale className="w-5 h-5" />
               </Button>
               <Button
                 variant="outline"
@@ -206,7 +196,7 @@ export default function RecipesList() {
                 key={category}
                 category={category}
                 recipes={recipes}
-                icon={categoryIcons[category] || "📖"}
+                icon={categoryIcons[category] || <Book className="w-5 h-5" />}
                 defaultOpen={Object.keys(groupedByCategory).length === 1}
                 onRecipeClick={(id) => setLocation(`/recipe/${id}`)}
               />

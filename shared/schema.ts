@@ -13,7 +13,7 @@ export const recipes = pgTable("recipes", {
   servings: integer("servings").notNull().default(4),
   ingredients: text("ingredients").array().notNull(),
   instructions: text("instructions").array().notNull(),
-  category: text("category"),
+  category: text("category").notNull().default("Uncategorized"),
   tags: text("tags").array(),
   calories: real("calories"),
   protein: real("protein"),
