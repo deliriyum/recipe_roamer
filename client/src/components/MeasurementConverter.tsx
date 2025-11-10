@@ -12,7 +12,7 @@ import {
 import { ArrowRightLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const conversions: Record<string, Record<string, number>> = {
+const conversions: Record<string, Record<string, number | ((val: number) => number)>> = {
   // Volume conversions (to ml)
   tsp: { ml: 4.929, tbsp: 0.333, cup: 0.021, oz: 0.167, gal: 0.0013 },
   tbsp: { ml: 14.787, tsp: 3, cup: 0.063, oz: 0.5, gal: 0.0039 },
