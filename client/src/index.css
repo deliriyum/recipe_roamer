@@ -69,8 +69,8 @@
   --destructive-foreground: 0 0% 100%;
 
   --input: 24 12% 72%;
-  --ring: 28 85% 48%;
-  --chart-1: 28 85% 48%;
+  --ring: 160 45% 42%;
+  --chart-1: 160 45% 42%;
   --chart-2: 18 72% 52%;
   --chart-3: 42 88% 58%;
   --chart-4: 8 65% 38%;
@@ -187,8 +187,8 @@
   --destructive-foreground: 0 0% 100%;
 
   --input: 24 10% 32%;
-  --ring: 28 82% 52%;
-  --chart-1: 28 82% 62%;
+  --ring: 160 42% 48%;
+  --chart-1: 160 42% 58%;
   --chart-2: 18 75% 65%;
   --chart-3: 42 88% 68%;
   --chart-4: 8 68% 58%;
@@ -241,6 +241,66 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/* 1950s Cookbook Decorative Elements */
+@layer components {
+  .vintage-divider {
+    position: relative;
+    height: 2px;
+    background: linear-gradient(to right, transparent, hsl(var(--border)), transparent);
+  }
+  
+  .vintage-divider::before,
+  .vintage-divider::after {
+    content: '❦';
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: hsl(var(--primary));
+    font-size: 1.2rem;
+  }
+  
+  .vintage-divider::before {
+    left: 0;
+  }
+  
+  .vintage-divider::after {
+    right: 0;
+  }
+  
+  .cookbook-header {
+    position: relative;
+    padding: 1rem;
+    border-top: 3px double hsl(var(--border));
+    border-bottom: 3px double hsl(var(--border));
+  }
+  
+  .cookbook-corner {
+    position: relative;
+  }
+  
+  .cookbook-corner::before {
+    content: '◆';
+    position: absolute;
+    color: hsl(var(--primary));
+    font-size: 0.75rem;
+  }
+  
+  @media print {
+    .no-print {
+      display: none !important;
+    }
+    
+    body {
+      background: white;
+      color: black;
+    }
+    
+    .print-break {
+      page-break-after: always;
+    }
   }
 }
 
