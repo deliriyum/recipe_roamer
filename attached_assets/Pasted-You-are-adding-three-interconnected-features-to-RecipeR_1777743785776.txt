@@ -1,0 +1,261 @@
+You are adding three interconnected features to RecipeRoamer: a Weekly Meal 
+Planner, a Smart Shopping List, and a Pantry tracker. The app uses React 18 + 
+Vite frontend, Express/Node backend, Drizzle ORM, PostgreSQL (Neon serverless), 
+shadcn/ui, TanStack Query v5, React Hook Form + Zod, and has OpenAI API access.
+
+CRITICAL CONTEXT: The recipes table schema exists in Drizzle but recipe CRUD 
+routes and storage methods are NOT yet implemented. Wire those up as part of 
+this feature addition — all three new features depend on real recipe data.
+
+════════════════════════════════════════════
+PART 0: WIRE UP EXISTING RECIPE STORAGE
+════════════════════════════════════════════
+
+Before building new features, implement the missing recipe backend:
+
+
+1. In server/storage.ts, add recipe storage methods:
+   - createRecipe(data) → Recipe
+   - getRecipes(userId?) → Recipe[]
+   - getRecipeById(id) → Recipe | null
+   - updateRecipe(id, data) → Recipe
+   - deleteRecipe(id) → void
+   - searchRecipes(query: string) → Recipe[] 
+     (searches title, tags, category, ingredients)
+
+2. In server/routes.ts (or equivalent), add REST endpoints:
+   - GET    /api/recipes          → list all recipes
+   - GET    /api/recipes/:id      → single recipe
+   - POST   /api/recipes          → create recipe
+   - PUT    /api/recipes/:id      → update recipe
+   - DELETE /api/recipes/:id      → delete recipe
+   - GET    /api/recipes/search?q=  → search recipes
+
+3. Replace mock data in RecipesList.tsx with real TanStack Query 
+   fetches to the above endpoints.
+
+════════════════════════════════════════════
+PART 1: DATABASE SCHEMA — NEW TABLES
+════════════════════════════════════════════
+
+Add these tables to the Drizzle schema and run migration:
+
+REPLACE the existing `ingredients TEXT[]` column in the recipes table with 
+a separate junction table:
+
+recipe_ingredients
+├── id               UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── recipe_id        UUID    FK → recipes.id (CASCADE DELETE)
+├── ingredient_name  TEXT    NOT NULL    (e.g. "flour")
+├── quantity         REAL    NULLABLE    (e.g. 2.0)
+├── unit             TEXT    NULLABLE    (e.g. "cups")
+└── notes            TEXT    NULLABLE    (e.g. "sifted", "room temperature")
+
+Update the recipe import pipeline, URL scraper, and OCR upload to parse 
+ingredients into structured fields at IMPORT TIME using OpenAI:
+  - Parse freeform strings like "2 cups flour, sifted" into:
+    { ingredient_name: "flour", quantity: 2.0, unit: "cups", notes: "sifted" }
+  - This means shopping list consolidation and pantry cross-referencing 
+    can do real math instead of string parsing at generation time
+  - Update all recipe GET endpoints to JOIN recipe_ingredients and return 
+    them as a structured array on the recipe object
+  - Update recipe display components to render from the new structure
+
+meal_plans
+├── id           UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── week_start   DATE    NOT NULL  (Monday of the planned week)
+├── created_at   TIMESTAMP DEFAULT now()
+└── updated_at   TIMESTAMP DEFAULT now()
+
+meal_plan_entries
+├── id              UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── meal_plan_id    UUID    FK → meal_plans.id (CASCADE DELETE)
+├── day_of_week     INTEGER NOT NULL  (0=Monday … 6=Sunday)
+├── meal_slot       TEXT    NOT NULL  (breakfast | lunch | dinner | snack)
+├── recipe_id       UUID    FK → recipes.id (SET NULL on delete) NULLABLE
+├── custom_meal     TEXT    NULLABLE  (freeform text if no recipe linked)
+└── servings_override INTEGER NULLABLE (override recipe default servings)
+
+shopping_lists
+├── id            UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── meal_plan_id  UUID    FK → meal_plans.id NULLABLE 
+│                         (null = standalone list)
+├── name          TEXT    NOT NULL DEFAULT 'Shopping List'
+├── created_at    TIMESTAMP DEFAULT now()
+└── updated_at    TIMESTAMP DEFAULT now()
+
+shopping_list_items
+├── id                UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── shopping_list_id  UUID    FK → shopping_lists.id (CASCADE DELETE)
+├── ingredient_name   TEXT    NOT NULL
+├── quantity          REAL    NULLABLE
+├── unit              TEXT    NULLABLE
+├── category          TEXT    NULLABLE  (produce | dairy | meat | pantry | etc.)
+├── is_checked        BOOLEAN DEFAULT false
+├── is_manual         BOOLEAN DEFAULT false  (manually added vs auto-generated)
+├── source_recipe_id  UUID    FK → recipes.id NULLABLE
+└── notes             TEXT    NULLABLE
+
+pantry_items
+├── id              UUID    PRIMARY KEY DEFAULT gen_random_uuid()
+├── ingredient_name TEXT    NOT NULL
+├── quantity        REAL    NULLABLE
+├── unit            TEXT    NULLABLE
+├── category        TEXT    NULLABLE
+├── expiry_date     DATE    NULLABLE
+├── added_at        TIMESTAMP DEFAULT now()
+└── updated_at      TIMESTAMP DEFAULT now()
+
+════════════════════════════════════════════
+PART 2: BACKEND — API ROUTES & STORAGE
+════════════════════════════════════════════
+
+Implement full CRUD storage methods and Express routes for all new tables.
+
+MEAL PLAN ROUTES:
+  GET    /api/meal-plans                    → list all meal plans
+  GET    /api/meal-plans/:id                → single plan with entries + recipes
+  GET    /api/meal-plans/week/:weekStart    → plan for a specific week (YYYY-MM-DD)
+  POST   /api/meal-plans                    → create new meal plan
+  POST   /api/meal-plans/:id/entries        → add entry to plan
+  PUT    /api/meal-plans/:id/entries/:entryId → update entry (recipe, slot, servings)
+  DELETE /api/meal-plans/:id/entries/:entryId → remove entry
+
+SHOPPING LIST ROUTES:
+  GET    /api/shopping-lists                → list all shopping lists
+  GET    /api/shopping-lists/:id            → single list with items
+  POST   /api/shopping-lists                → create new list
+  POST   /api/shopping-lists/generate       → generate from meal plan (see below)
+  PUT    /api/shopping-lists/:id/items/:itemId → update item (check/uncheck, qty)
+  POST   /api/shopping-lists/:id/items      → add manual item
+  DELETE /api/shopping-lists/:id/items/:itemId → remove item
+  DELETE /api/shopping-lists/:id/checked    → clear all checked items
+
+SHOPPING LIST GENERATION ENDPOINT (POST /api/shopping-lists/generate):
+  - Accepts: { mealPlanId, servingsMultiplier? }
+  - Collects all ingredients from all recipes in the meal plan
+  - Adjusts quantities by servings_override vs recipe default servings
+  - Uses OpenAI API to parse and consolidate ingredient strings:
+      Prompt: "Parse these ingredient strings and consolidate duplicates. 
+      Return JSON array of: { ingredient_name, quantity, unit, category }.
+      Combine identical ingredients (e.g. '2 cups flour' + '1 cup flour' = 
+      '3 cups flour'). Normalize units (tbsp→tablespoon, etc). 
+      Categorize each item as one of: produce, dairy, meat, seafood, 
+      bakery, pantry, frozen, beverages, spices, other."
+  - Cross-reference against pantry_items: if pantry has sufficient 
+    quantity, mark item as is_checked=true with a note "In pantry"
+  - Creates shopping_list record linked to meal_plan_id
+  - Returns full shopping list with items
+
+PANTRY ROUTES:
+  GET    /api/pantry                        → list all pantry items
+  POST   /api/pantry                        → add item to pantry
+  PUT    /api/pantry/:id                    → update item (qty, expiry, etc.)
+  DELETE /api/pantry/:id                    → remove item
+  POST   /api/pantry/bulk-add               → add multiple items at once
+  POST   /api/pantry/from-shopping-list     → accepts array of shopping_list_item 
+                                              ids, moves checked items to pantry
+
+════════════════════════════════════════════
+PART 3: FRONTEND — MEAL PLANNER PAGE
+════════════════════════════════════════════
+
+Create /meal-planner route. Add "Meal Planner" to the bottom nav bar 
+alongside Recipes, Add, Import, Profile.
+
+WEEKLY CALENDAR VIEW:
+- Display Mon–Sun as columns, with rows for: Breakfast, Lunch, Dinner, Snack
+- Week navigation: previous/next week arrows + "This Week" button
+- Each cell shows: recipe image thumbnail (if linked) + recipe name, 
+  OR custom meal text, OR an empty "+" add button
+- Clicking "+" or an existing meal opens an AddMealDialog:
+    - Searchable dropdown/combobox (shadcn Combobox component) that 
+      queries GET /api/recipes/search?q= in real time as user types
+    - Shows recipe thumbnail, name, cook time in dropdown results
+    - "Use this recipe" button links it; also shows servings override input
+    - OR user can type a custom meal name (freeform) without linking a recipe
+    - Submit saves to meal_plan_entries
+- Clicking an existing meal entry opens a detail popover showing:
+    recipe name, servings, quick link to full recipe, and a Remove button
+
+PRINT OPTIONS:
+- "Print" button opens a PrintOptionsDialog with options (radio group):
+    □ Calendar only
+    □ Calendar + Recipes (full recipe cards below the calendar)
+    □ Calendar + Shopping List
+- On confirm, opens browser print with appropriate CSS @media print styles
+- Print layout: clean, no nav/UI chrome, proper page breaks between sections
+- When "Calendar + Recipes" is selected, fetch and render full recipe 
+  details (ingredients + instructions) below the weekly grid
+
+════════════════════════════════════════════
+PART 4: FRONTEND — SHOPPING LIST PAGE
+════════════════════════════════════════════
+
+Create /shopping-list route. Add as accessible from both the Meal Planner 
+and the bottom nav (or as a tab within Meal Planner — your call on UX).
+
+SHOPPING LIST UI:
+- Top bar: list name (editable), "Generate from Meal Plan" button, 
+  "Clear Checked" button, "Print" button
+- "Generate from Meal Plan" opens a dialog to select which meal plan 
+  (week) to generate from, then calls POST /api/shopping-lists/generate
+- Items grouped by category (Produce, Dairy, Meat, etc.) with section headers
+- Each item shows: checkbox, quantity + unit, ingredient name, 
+  optional source recipe tag, optional notes
+- Checking an item marks is_checked=true (strikethrough style)
+- Inline editing: tap quantity/unit/name to edit in place
+- Manual add: text input at bottom (or floating "+ Add item" button)
+  that accepts freeform text — use OpenAI to parse it into structured 
+  {name, quantity, unit, category} before saving, or save raw if parse fails
+- After checking off items, show a toast/banner: 
+  "Add purchased items to your pantry?" with "Yes, add all checked" button
+  → calls POST /api/pantry/bulk-add with the checked items
+
+════════════════════════════════════════════
+PART 5: FRONTEND — PANTRY PAGE
+════════════════════════════════════════════
+
+Create /pantry route, accessible from the Profile tab or nav.
+
+PANTRY UI:
+- Items displayed in a grid or grouped list by category
+- Each item shows: name, quantity + unit, expiry date (with warning 
+  highlight if within 7 days), category badge
+- Add item: form with fields for name, quantity, unit, category, expiry date
+- Edit/delete per item
+- Search/filter bar at top
+- When generating a shopping list, pantry items automatically cross-reference
+  (handled in backend) — pantry items that cover the shopping need show 
+  as pre-checked with "In pantry" label
+
+════════════════════════════════════════════
+PART 6: DESIGN & CONSISTENCY REQUIREMENTS
+════════════════════════════════════════════
+
+- Match existing app aesthetic: shadcn/ui components, Tailwind CSS classes, 
+  the warm/vintage visual style already present in the app
+- Use existing color scheme and typography — do not introduce new design systems
+- All new pages must be responsive (mobile-first, works on phone screen)
+- Bottom navigation must remain consistent across all pages
+- Use TanStack Query for all data fetching with proper loading/error states
+- All forms use React Hook Form + Zod validation
+- Optimistic updates where appropriate (checking off items, etc.)
+- Toast notifications (shadcn Sonner or Toast) for: save success, 
+  generate complete, pantry add confirmation
+- No hardcoded mock data anywhere — everything from the database
+
+════════════════════════════════════════════
+IMPLEMENTATION ORDER (do not skip steps):
+════════════════════════════════════════════
+
+1. Database schema migration (add new tables)
+2. Wire up existing recipe storage + routes (Part 0)
+3. Backend storage methods for all new tables
+4. Backend API routes for all new tables  
+5. Shopping list generation logic with OpenAI consolidation
+6. Meal Planner page + AddMealDialog + recipe search
+7. Shopping List page with generate + manual add + pantry prompt
+8. Pantry page
+9. Print functionality
+10. Navigation updates to include all new routes

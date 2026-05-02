@@ -1,15 +1,375 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { z } from "zod";
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function parseIngredientStrings(strings: string[]) {
+  return strings.map((s) => {
+    const match = s.match(/^([\d./\s]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
+    if (match) {
+      const qtyStr = match[1]?.trim();
+      let qty: number | undefined;
+      if (qtyStr) {
+        if (qtyStr.includes("/")) {
+          const [n, d] = qtyStr.split("/").map(Number);
+          qty = n / d;
+        } else {
+          qty = parseFloat(qtyStr);
+        }
+      }
+      return {
+        ingredientName: match[3]?.trim() ?? s,
+        quantity: qty ?? null,
+        unit: match[2]?.trim() ?? null,
+        notes: null,
+      };
+    }
+    return { ingredientName: s, quantity: null, unit: null, notes: null };
+  });
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  // ── RECIPES ─────────────────────────────────────────────────────────────────
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  app.get("/api/recipes", async (_req, res) => {
+    const recipes = await storage.getRecipes();
+    res.json(recipes);
+  });
+
+  app.get("/api/recipes/search", async (req, res) => {
+    const q = (req.query.q as string) ?? "";
+    const results = await storage.searchRecipes(q);
+    res.json(results);
+  });
+
+  app.get("/api/recipes/:id", async (req, res) => {
+    const recipe = await storage.getRecipeById(req.params.id);
+    if (!recipe) return res.status(404).json({ error: "Recipe not found" });
+    res.json(recipe);
+  });
+
+  app.post("/api/recipes", async (req, res) => {
+    try {
+      const { ingredients: rawIngredients, recipeIngredients, ...rest } = req.body;
+      let ingredients = recipeIngredients;
+      if (!ingredients && rawIngredients && Array.isArray(rawIngredients)) {
+        ingredients = parseIngredientStrings(rawIngredients as string[]);
+      }
+      const recipe = await storage.createRecipe(rest, ingredients ?? []);
+      res.status(201).json(recipe);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.put("/api/recipes/:id", async (req, res) => {
+    try {
+      const { ingredients: rawIngredients, recipeIngredients, ...rest } = req.body;
+      let ingredients = recipeIngredients;
+      if (!ingredients && rawIngredients && Array.isArray(rawIngredients)) {
+        ingredients = parseIngredientStrings(rawIngredients as string[]);
+      }
+      const recipe = await storage.updateRecipe(req.params.id, rest, ingredients);
+      if (!recipe) return res.status(404).json({ error: "Recipe not found" });
+      res.json(recipe);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.delete("/api/recipes/:id", async (req, res) => {
+    await storage.deleteRecipe(req.params.id);
+    res.status(204).send();
+  });
+
+  // ── MEAL PLANS ───────────────────────────────────────────────────────────────
+
+  app.get("/api/meal-plans", async (_req, res) => {
+    const plans = await storage.getMealPlans();
+    res.json(plans);
+  });
+
+  app.get("/api/meal-plans/week/:weekStart", async (req, res) => {
+    const plan = await storage.getMealPlanByWeek(req.params.weekStart);
+    if (!plan) return res.status(404).json({ error: "No plan for this week" });
+    res.json(plan);
+  });
+
+  app.get("/api/meal-plans/:id", async (req, res) => {
+    const plan = await storage.getMealPlanById(req.params.id);
+    if (!plan) return res.status(404).json({ error: "Meal plan not found" });
+    res.json(plan);
+  });
+
+  app.post("/api/meal-plans", async (req, res) => {
+    try {
+      const schema = z.object({ weekStart: z.string() });
+      const data = schema.parse(req.body);
+      const plan = await storage.createMealPlan(data);
+      res.status(201).json(plan);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.post("/api/meal-plans/:id/entries", async (req, res) => {
+    try {
+      const schema = z.object({
+        dayOfWeek: z.number().int().min(0).max(6),
+        mealSlot: z.enum(["breakfast", "lunch", "dinner", "snack"]),
+        recipeId: z.string().optional(),
+        customMeal: z.string().optional(),
+        servingsOverride: z.number().int().optional(),
+      });
+      const data = schema.parse(req.body);
+      const entry = await storage.addMealPlanEntry(req.params.id, data);
+      res.status(201).json(entry);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.put("/api/meal-plans/:id/entries/:entryId", async (req, res) => {
+    try {
+      const entry = await storage.updateMealPlanEntry(req.params.id, req.params.entryId, req.body);
+      if (!entry) return res.status(404).json({ error: "Entry not found" });
+      res.json(entry);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.delete("/api/meal-plans/:id/entries/:entryId", async (req, res) => {
+    await storage.deleteMealPlanEntry(req.params.id, req.params.entryId);
+    res.status(204).send();
+  });
+
+  // ── SHOPPING LISTS ───────────────────────────────────────────────────────────
+
+  app.get("/api/shopping-lists", async (_req, res) => {
+    const lists = await storage.getShoppingLists();
+    res.json(lists);
+  });
+
+  app.get("/api/shopping-lists/:id", async (req, res) => {
+    const list = await storage.getShoppingListById(req.params.id);
+    if (!list) return res.status(404).json({ error: "Shopping list not found" });
+    res.json(list);
+  });
+
+  app.post("/api/shopping-lists", async (req, res) => {
+    try {
+      const list = await storage.createShoppingList(req.body);
+      res.status(201).json(list);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.post("/api/shopping-lists/generate", async (req, res) => {
+    try {
+      const { mealPlanId, servingsMultiplier = 1 } = req.body;
+      if (!mealPlanId) return res.status(400).json({ error: "mealPlanId required" });
+
+      const plan = await storage.getMealPlanById(mealPlanId);
+      if (!plan) return res.status(404).json({ error: "Meal plan not found" });
+
+      const rawIngredients: { name: string; qty: number | null; unit: string | null; recipeId: string | null }[] = [];
+
+      for (const entry of plan.entries) {
+        if (!entry.recipe) continue;
+        const recipe = entry.recipe;
+        const ratio = ((entry.servingsOverride ?? recipe.servings) / recipe.servings) * servingsMultiplier;
+        for (const ing of recipe.recipeIngredients) {
+          rawIngredients.push({
+            name: ing.ingredientName,
+            qty: ing.quantity != null ? ing.quantity * ratio : null,
+            unit: ing.unit,
+            recipeId: recipe.id,
+          });
+        }
+      }
+
+      const pantry = await storage.getPantryItems();
+
+      let consolidatedItems: Array<{ ingredient_name: string; quantity: number | null; unit: string | null; category: string | null }> = [];
+
+      if (rawIngredients.length > 0) {
+        try {
+          const prompt = `Parse and consolidate these ingredient strings. Combine duplicates (e.g. 2 cups flour + 1 cup flour = 3 cups flour). Normalize units (tbsp→tablespoon, tsp→teaspoon). Categorize each as one of: produce, dairy, meat, seafood, bakery, pantry, frozen, beverages, spices, other.
+
+Ingredients:
+${rawIngredients.map((i) => `${i.qty ?? ""} ${i.unit ?? ""} ${i.name}`.trim()).join("\n")}
+
+Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_name": string, "quantity": number|null, "unit": string|null, "category": string }`;
+
+          const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" },
+          });
+          const text = response.choices[0].message.content ?? "{}";
+          const parsed = JSON.parse(text);
+          consolidatedItems = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.ingredients ?? []);
+        } catch {
+          consolidatedItems = rawIngredients.map((i) => ({
+            ingredient_name: i.name,
+            quantity: i.qty,
+            unit: i.unit,
+            category: "other",
+          }));
+        }
+      }
+
+      const items = consolidatedItems.map((item) => {
+        const pantryMatch = pantry.find(
+          (p) =>
+            p.ingredientName.toLowerCase() === item.ingredient_name.toLowerCase() &&
+            (p.quantity ?? 0) >= (item.quantity ?? 0)
+        );
+        return {
+          ingredientName: item.ingredient_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          category: item.category,
+          isChecked: !!pantryMatch,
+          isManual: false,
+          sourceRecipeId: null,
+          notes: pantryMatch ? "In pantry" : null,
+          shoppingListId: "",
+        };
+      });
+
+      const weekLabel = new Date(plan.weekStart).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+      const list = await storage.createShoppingListWithItems(
+        { mealPlanId, name: `Shopping List – Week of ${weekLabel}` },
+        items
+      );
+
+      res.status(201).json(list);
+    } catch (err) {
+      console.error("Shopping list generation error:", err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.put("/api/shopping-lists/:id/items/:itemId", async (req, res) => {
+    try {
+      const item = await storage.updateShoppingListItem(req.params.id, req.params.itemId, req.body);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      res.json(item);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.post("/api/shopping-lists/:id/items", async (req, res) => {
+    try {
+      let itemData = req.body;
+      if (req.body.rawText && !req.body.ingredientName) {
+        try {
+          const prompt = `Parse this ingredient string into JSON: "${req.body.rawText}". Return only: { "ingredient_name": string, "quantity": number|null, "unit": string|null, "category": string }`;
+          const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: prompt }],
+            response_format: { type: "json_object" },
+          });
+          const parsed = JSON.parse(response.choices[0].message.content ?? "{}");
+          itemData = {
+            ingredientName: parsed.ingredient_name ?? req.body.rawText,
+            quantity: parsed.quantity ?? null,
+            unit: parsed.unit ?? null,
+            category: parsed.category ?? null,
+            isManual: true,
+          };
+        } catch {
+          itemData = { ingredientName: req.body.rawText, isManual: true };
+        }
+      }
+      const item = await storage.addShoppingListItem(req.params.id, itemData);
+      res.status(201).json(item);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.delete("/api/shopping-lists/:id/items/:itemId", async (req, res) => {
+    await storage.deleteShoppingListItem(req.params.id, req.params.itemId);
+    res.status(204).send();
+  });
+
+  app.delete("/api/shopping-lists/:id/checked", async (req, res) => {
+    await storage.clearCheckedItems(req.params.id);
+    res.status(204).send();
+  });
+
+  // ── PANTRY ───────────────────────────────────────────────────────────────────
+
+  app.get("/api/pantry", async (_req, res) => {
+    const items = await storage.getPantryItems();
+    res.json(items);
+  });
+
+  app.post("/api/pantry", async (req, res) => {
+    try {
+      const item = await storage.addPantryItem(req.body);
+      res.status(201).json(item);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.put("/api/pantry/:id", async (req, res) => {
+    try {
+      const item = await storage.updatePantryItem(req.params.id, req.body);
+      if (!item) return res.status(404).json({ error: "Pantry item not found" });
+      res.json(item);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.delete("/api/pantry/:id", async (req, res) => {
+    await storage.deletePantryItem(req.params.id);
+    res.status(204).send();
+  });
+
+  app.post("/api/pantry/bulk-add", async (req, res) => {
+    try {
+      const items = await storage.bulkAddPantryItems(req.body);
+      res.status(201).json(items);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
+  app.post("/api/pantry/from-shopping-list", async (req, res) => {
+    try {
+      const { itemIds, listId } = req.body as { itemIds: string[]; listId: string };
+      const list = await storage.getShoppingListById(listId);
+      if (!list) return res.status(404).json({ error: "List not found" });
+      const toAdd = list.items.filter((i) => itemIds.includes(i.id));
+      const added = await storage.bulkAddPantryItems(
+        toAdd.map((i) => ({
+          ingredientName: i.ingredientName,
+          quantity: i.quantity,
+          unit: i.unit,
+          category: i.category,
+          expiryDate: null,
+        }))
+      );
+      res.status(201).json(added);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  });
 
   const httpServer = createServer(app);
-
   return httpServer;
 }

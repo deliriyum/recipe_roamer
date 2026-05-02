@@ -1,87 +1,65 @@
 import { useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import type { RecipeIngredient } from "@shared/schema";
 
 interface IngredientsListProps {
-  ingredients: string[];
+  ingredients: RecipeIngredient[];
   originalServings: number;
   currentServings: number;
 }
 
-export function IngredientsList({
-  ingredients,
-  originalServings,
-  currentServings,
-}: IngredientsListProps) {
-  const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+function formatIngredient(ing: RecipeIngredient, ratio: number): string {
+  const parts: string[] = [];
+  if (ing.quantity != null) {
+    const adjusted = ing.quantity * ratio;
+    const rounded = Math.round(adjusted * 100) / 100;
+    parts.push(String(rounded));
+  }
+  if (ing.unit) parts.push(ing.unit);
+  parts.push(ing.ingredientName);
+  if (ing.notes) parts.push(`(${ing.notes})`);
+  return parts.join(" ");
+}
 
-  const toggleItem = (index: number) => {
-    const newChecked = new Set(checkedItems);
-    if (newChecked.has(index)) {
-      newChecked.delete(index);
-    } else {
-      newChecked.add(index);
-    }
-    setCheckedItems(newChecked);
-  };
+export function IngredientsList({ ingredients, originalServings, currentServings }: IngredientsListProps) {
+  const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
+  const ratio = originalServings > 0 ? currentServings / originalServings : 1;
 
-  const adjustQuantity = (ingredient: string) => {
-    if (originalServings === currentServings) {
-      return ingredient;
-    }
-
-    const ratio = currentServings / originalServings;
-    const numberPattern = /(\d+(?:\.\d+)?(?:\/\d+)?)/g;
-    
-    return ingredient.replace(numberPattern, (match) => {
-      if (match.includes('/')) {
-        const [num, denom] = match.split('/').map(Number);
-        const decimal = num / denom;
-        const adjusted = decimal * ratio;
-        
-        if (adjusted < 1) {
-          const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
-          const denominator = Math.round(1 / adjusted);
-          const numerator = 1;
-          const divisor = gcd(numerator, denominator);
-          return `${numerator / divisor}/${denominator / divisor}`;
-        }
-        return adjusted.toFixed(2).replace(/\.?0+$/, '');
-      }
-      
-      const num = parseFloat(match);
-      const adjusted = num * ratio;
-      return adjusted.toFixed(2).replace(/\.?0+$/, '');
+  const toggle = (id: string) => {
+    setCheckedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   };
 
+  if (!ingredients || ingredients.length === 0) {
+    return <p className="text-muted-foreground text-sm">No ingredients listed.</p>;
+  }
+
   return (
     <div className="space-y-3">
-      {ingredients.map((ingredient, index) => {
-        const isChecked = checkedItems.has(index);
-        const displayIngredient = adjustQuantity(ingredient);
-
+      {ingredients.map((ing) => {
+        const isChecked = checkedItems.has(ing.id);
         return (
           <div
-            key={index}
-            className="flex items-start gap-3 group"
-            data-testid={`ingredient-item-${index}`}
+            key={ing.id}
+            className="flex items-start gap-3"
+            data-testid={`ingredient-item-${ing.id}`}
           >
             <Checkbox
-              id={`ingredient-${index}`}
+              id={`ing-${ing.id}`}
               checked={isChecked}
-              onCheckedChange={() => toggleItem(index)}
+              onCheckedChange={() => toggle(ing.id)}
               className="mt-1"
-              data-testid={`checkbox-ingredient-${index}`}
+              data-testid={`checkbox-ingredient-${ing.id}`}
             />
             <label
-              htmlFor={`ingredient-${index}`}
-              className={`flex-1 cursor-pointer leading-relaxed ${
-                isChecked
-                  ? "line-through text-muted-foreground"
-                  : "text-foreground"
-              }`}
+              htmlFor={`ing-${ing.id}`}
+              className={`flex-1 cursor-pointer leading-relaxed ${isChecked ? "line-through text-muted-foreground" : "text-foreground"}`}
             >
-              {displayIngredient}
+              {formatIngredient(ing, ratio)}
             </label>
           </div>
         );

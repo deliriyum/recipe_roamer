@@ -7,69 +7,65 @@ import { ServingsCalculator } from "@/components/ServingsCalculator";
 import { IngredientsList } from "@/components/IngredientsList";
 import { InstructionsList } from "@/components/InstructionsList";
 import { NutritionPanel } from "@/components/NutritionPanel";
-import { useLocation } from "wouter";
-import cookiesImage from "@assets/generated_images/chocolate_chip_cookies_recipe_2fbf360c.png";
-
-// TODO: remove mock functionality
-const mockRecipe = {
-  id: "1",
-  title: "Chocolate Chip Cookies",
-  description: "Classic homemade chocolate chip cookies with a crispy edge and chewy center. Perfect for any occasion!",
-  imageUrl: cookiesImage,
-  prepTime: 15,
-  cookTime: 12,
-  servings: 24,
-  ingredients: [
-    "2 1/4 cups all-purpose flour",
-    "1 cup butter, softened",
-    "3/4 cup granulated sugar",
-    "3/4 cup packed brown sugar",
-    "2 large eggs",
-    "2 tsp vanilla extract",
-    "1 tsp baking soda",
-    "1/2 tsp salt",
-    "2 cups chocolate chips",
-  ],
-  instructions: [
-    "Preheat oven to 375°F (190°C).",
-    "In a large bowl, cream together butter and sugars until light and fluffy, about 3-4 minutes.",
-    "Beat in eggs one at a time, then stir in vanilla extract.",
-    "In a separate bowl, whisk together flour, baking soda, and salt.",
-    "Gradually blend the dry ingredients into the butter mixture.",
-    "Fold in chocolate chips until evenly distributed.",
-    "Drop rounded tablespoons of dough onto ungreased cookie sheets, spacing them 2 inches apart.",
-    "Bake for 9 to 11 minutes or until golden brown around the edges.",
-    "Cool on baking sheet for 2 minutes before removing to a wire rack.",
-  ],
-  category: "Dessert",
-  tags: ["Cookies", "Chocolate", "Baking"],
-  calories: 150,
-  protein: 2,
-  carbs: 20,
-  fats: 7,
-};
+import { Skeleton } from "@/components/ui/skeleton";
+import { useLocation, useParams } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import type { RecipeWithIngredients } from "@shared/schema";
 
 export default function RecipeDetail() {
   const [, setLocation] = useLocation();
-  const [servings, setServings] = useState(mockRecipe.servings);
+  const params = useParams<{ id: string }>();
   const [isFavorite, setIsFavorite] = useState(false);
+
+  const { data: recipe, isLoading, error } = useQuery<RecipeWithIngredients>({
+    queryKey: ["/api/recipes", params.id],
+  });
+
+  const [servings, setServings] = useState<number | null>(null);
+  const currentServings = servings ?? recipe?.servings ?? 4;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background pb-20">
+        <Skeleton className="aspect-video w-full" />
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+          <Skeleton className="h-10 w-3/4" />
+          <Skeleton className="h-6 w-full" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !recipe) {
+    return (
+      <div className="min-h-screen bg-background pb-20 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <p className="text-muted-foreground">Recipe not found.</p>
+          <Button onClick={() => setLocation("/")}>Back to Recipes</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background pb-20">
       <div className="relative">
-        <div className="aspect-video bg-muted overflow-hidden">
-          <img
-            src={mockRecipe.imageUrl}
-            alt={mockRecipe.title}
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/20" />
-        </div>
-        
+        {recipe.imageUrl ? (
+          <div className="aspect-video bg-muted overflow-hidden">
+            <img src={recipe.imageUrl} alt={recipe.title} className="w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/20" />
+          </div>
+        ) : (
+          <div className="aspect-video bg-muted flex items-center justify-center">
+            <span className="text-muted-foreground text-lg font-serif">{recipe.category}</span>
+          </div>
+        )}
+
         <Button
           variant="ghost"
           size="icon"
-          className="absolute top-4 left-4 bg-background/90 backdrop-blur-sm hover:bg-background"
+          className="absolute top-4 left-4 bg-background/90 backdrop-blur-sm"
           onClick={() => setLocation("/")}
           data-testid="button-back"
         >
@@ -80,8 +76,17 @@ export default function RecipeDetail() {
           <Button
             variant="ghost"
             size="icon"
-            className="bg-background/90 backdrop-blur-sm hover:bg-background"
-            onClick={() => console.log("Share clicked")}
+            className="bg-background/90 backdrop-blur-sm"
+            onClick={() => setIsFavorite(!isFavorite)}
+            data-testid="button-favorite"
+          >
+            <Heart className={`w-5 h-5 ${isFavorite ? "fill-red-500 text-red-500" : ""}`} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="bg-background/90 backdrop-blur-sm"
+            onClick={() => window.print()}
             data-testid="button-share"
           >
             <Share2 className="w-5 h-5" />
@@ -89,21 +94,8 @@ export default function RecipeDetail() {
           <Button
             variant="ghost"
             size="icon"
-            className="bg-background/90 backdrop-blur-sm hover:bg-background"
-            onClick={() => setIsFavorite(!isFavorite)}
-            data-testid="button-favorite"
-          >
-            <Heart
-              className={`w-5 h-5 ${
-                isFavorite ? "fill-red-500 text-red-500" : ""
-              }`}
-            />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="bg-background/90 backdrop-blur-sm hover:bg-background"
-            onClick={() => console.log("Edit clicked")}
+            className="bg-background/90 backdrop-blur-sm"
+            onClick={() => console.log("Edit recipe:", recipe.id)}
             data-testid="button-edit"
           >
             <Edit className="w-5 h-5" />
@@ -113,32 +105,28 @@ export default function RecipeDetail() {
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         <div>
-          <h1 className="font-serif text-3xl font-bold mb-2">
-            {mockRecipe.title}
-          </h1>
-          {mockRecipe.description && (
-            <p className="text-muted-foreground">{mockRecipe.description}</p>
+          <h1 className="font-serif text-3xl font-bold mb-2">{recipe.title}</h1>
+          {recipe.description && (
+            <p className="text-muted-foreground">{recipe.description}</p>
           )}
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Badge variant="secondary">
-            Prep: {mockRecipe.prepTime} min
-          </Badge>
-          <Badge variant="secondary">
-            Cook: {mockRecipe.cookTime} min
-          </Badge>
-          <Badge variant="secondary">
-            Total: {mockRecipe.prepTime + mockRecipe.cookTime} min
-          </Badge>
-          {mockRecipe.category && (
-            <Badge>{mockRecipe.category}</Badge>
+          {recipe.prepTime != null && (
+            <Badge variant="secondary">Prep: {recipe.prepTime} min</Badge>
           )}
+          {recipe.cookTime != null && (
+            <Badge variant="secondary">Cook: {recipe.cookTime} min</Badge>
+          )}
+          {recipe.prepTime != null && recipe.cookTime != null && (
+            <Badge variant="secondary">Total: {recipe.prepTime + recipe.cookTime} min</Badge>
+          )}
+          <Badge>{recipe.category}</Badge>
         </div>
 
         <Card className="p-6">
           <ServingsCalculator
-            servings={servings}
+            servings={currentServings}
             onServingsChange={setServings}
           />
         </Card>
@@ -146,30 +134,30 @@ export default function RecipeDetail() {
         <Card className="p-6">
           <h2 className="text-xl font-semibold mb-4">Ingredients</h2>
           <IngredientsList
-            ingredients={mockRecipe.ingredients}
-            originalServings={mockRecipe.servings}
-            currentServings={servings}
+            ingredients={recipe.recipeIngredients}
+            originalServings={recipe.servings}
+            currentServings={currentServings}
           />
         </Card>
 
         <Card className="p-6">
           <h2 className="text-xl font-semibold mb-4">Instructions</h2>
-          <InstructionsList instructions={mockRecipe.instructions} />
+          <InstructionsList instructions={recipe.instructions ?? []} />
         </Card>
 
-        <NutritionPanel
-          calories={mockRecipe.calories}
-          protein={mockRecipe.protein}
-          carbs={mockRecipe.carbs}
-          fats={mockRecipe.fats}
-        />
+        {(recipe.calories || recipe.protein || recipe.carbs || recipe.fats) && (
+          <NutritionPanel
+            calories={recipe.calories}
+            protein={recipe.protein}
+            carbs={recipe.carbs}
+            fats={recipe.fats}
+          />
+        )}
 
-        {mockRecipe.tags && mockRecipe.tags.length > 0 && (
+        {recipe.tags && recipe.tags.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {mockRecipe.tags.map((tag) => (
-              <Badge key={tag} variant="outline">
-                {tag}
-              </Badge>
+            {recipe.tags.map((tag) => (
+              <Badge key={tag} variant="outline">{tag}</Badge>
             ))}
           </div>
         )}

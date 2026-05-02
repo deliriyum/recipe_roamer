@@ -9,6 +9,9 @@ import RecipesList from "@/pages/RecipesList";
 import RecipeDetail from "@/pages/RecipeDetail";
 import AddRecipe from "@/pages/AddRecipe";
 import ImportRecipe from "@/pages/ImportRecipe";
+import MealPlanner from "@/pages/MealPlanner";
+import ShoppingList from "@/pages/ShoppingList";
+import Pantry from "@/pages/Pantry";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -18,6 +21,9 @@ function Router() {
       <Route path="/recipe/:id" component={RecipeDetail} />
       <Route path="/add" component={AddRecipe} />
       <Route path="/import" component={ImportRecipe} />
+      <Route path="/meal-planner" component={MealPlanner} />
+      <Route path="/shopping-list" component={ShoppingList} />
+      <Route path="/pantry" component={Pantry} />
       <Route component={NotFound} />
     </Switch>
   );
