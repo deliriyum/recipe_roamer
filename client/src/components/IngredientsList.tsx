@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { toFraction } from "@/lib/fractions";
 import type { RecipeIngredient } from "@shared/schema";
 
 interface IngredientsListProps {
@@ -12,8 +13,7 @@ function formatIngredient(ing: RecipeIngredient, ratio: number): string {
   const parts: string[] = [];
   if (ing.quantity != null) {
     const adjusted = ing.quantity * ratio;
-    const rounded = Math.round(adjusted * 100) / 100;
-    parts.push(String(rounded));
+    parts.push(toFraction(adjusted));
   }
   if (ing.unit) parts.push(ing.unit);
   parts.push(ing.ingredientName);

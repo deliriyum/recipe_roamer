@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Printer, Scale, Utensils, Coffee, Cake, Salad, Book } from "lucide-react";
+import { Printer, Scale, Book, Coffee, Utensils, UtensilsCrossed, Apple, Flame, Salad, IceCream, Cookie, PartyPopper } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/SearchBar";
 import { EmptyState } from "@/components/EmptyState";
@@ -11,6 +11,19 @@ import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import type { RecipeWithIngredients } from "@shared/schema";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PREDEFINED_TAGS } from "@/lib/tags";
+
+const TAG_ICONS: Record<string, React.ReactNode> = {
+  Breakfast:  <Coffee className="w-5 h-5" />,
+  Lunch:      <Utensils className="w-5 h-5" />,
+  Dinner:     <UtensilsCrossed className="w-5 h-5" />,
+  Snack:      <Apple className="w-5 h-5" />,
+  Soup:       <Flame className="w-5 h-5" />,
+  Appetizer:  <Salad className="w-5 h-5" />,
+  Dessert:    <IceCream className="w-5 h-5" />,
+  Pastry:     <Cookie className="w-5 h-5" />,
+  Party:      <PartyPopper className="w-5 h-5" />,
+};
 
 export default function RecipesList() {
   const [search, setSearch] = useState("");
@@ -44,23 +57,41 @@ export default function RecipesList() {
     });
   }, [recipes, search, filters]);
 
-  const groupedByCategory = useMemo(() => {
-    const groups: Record<string, typeof filteredRecipes> = {};
-    filteredRecipes.forEach((recipe) => {
-      const category = recipe.category ?? "Uncategorized";
-      if (!groups[category]) groups[category] = [];
-      groups[category].push(recipe);
-    });
-    return groups;
-  }, [filteredRecipes]);
-
-  const categoryIcons: Record<string, React.ReactNode> = {
-    Breakfast: <Coffee className="w-5 h-5" />,
-    "Main Courses": <Utensils className="w-5 h-5" />,
-    Desserts: <Cake className="w-5 h-5" />,
-    Salads: <Salad className="w-5 h-5" />,
-    Uncategorized: <Book className="w-5 h-5" />,
+  // Normalize "dinner" → "Dinner" etc. for imported recipes with lowercase tags
+  const normalizeTag = (tag: string): string => {
+    const match = PREDEFINED_TAGS.find((p) => p.toLowerCase() === tag.toLowerCase());
+    return match ?? tag;
   };
+
+  // Group by tags — a recipe with multiple tags appears in each matching section
+  const groupedByTag = useMemo(() => {
+    const groups: Record<string, typeof filteredRecipes> = {};
+
+    filteredRecipes.forEach((recipe) => {
+      const recipeTags = recipe.tags && recipe.tags.length > 0 ? recipe.tags : ["Uncategorized"];
+      recipeTags.forEach((rawTag) => {
+        const tag = normalizeTag(rawTag);
+        if (!groups[tag]) groups[tag] = [];
+        groups[tag].push(recipe);
+      });
+    });
+
+    // Sort: predefined tags first (in order), then custom alphabetically, Uncategorized last
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+      const ai = PREDEFINED_TAGS.indexOf(a as typeof PREDEFINED_TAGS[number]);
+      const bi = PREDEFINED_TAGS.indexOf(b as typeof PREDEFINED_TAGS[number]);
+      if (a === "Uncategorized") return 1;
+      if (b === "Uncategorized") return -1;
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    const sorted: Record<string, typeof filteredRecipes> = {};
+    sortedKeys.forEach((k) => { sorted[k] = groups[k]; });
+    return sorted;
+  }, [filteredRecipes]);
 
   return (
     <div className="min-h-screen bg-background pb-20">
@@ -113,7 +144,7 @@ export default function RecipesList() {
               <Skeleton key={i} className="h-16 w-full rounded-md" />
             ))}
           </div>
-        ) : Object.keys(groupedByCategory).length === 0 ? (
+        ) : Object.keys(groupedByTag).length === 0 ? (
           <EmptyState
             title={search || filters.ingredients.length > 0 || filters.tags.length > 0 ? "No recipes found" : "No recipes yet"}
             description={
@@ -126,13 +157,13 @@ export default function RecipesList() {
           />
         ) : (
           <div className="space-y-4">
-            {Object.entries(groupedByCategory).map(([category, cats]) => (
+            {Object.entries(groupedByTag).map(([tag, tagRecipes]) => (
               <CategorySection
-                key={category}
-                category={category}
-                recipes={cats}
-                icon={categoryIcons[category] ?? <Book className="w-5 h-5" />}
-                defaultOpen={Object.keys(groupedByCategory).length === 1}
+                key={tag}
+                category={tag}
+                recipes={tagRecipes}
+                icon={TAG_ICONS[tag] ?? <Book className="w-5 h-5" />}
+                defaultOpen={Object.keys(groupedByTag).length === 1}
                 onRecipeClick={(id) => setLocation(`/recipe/${id}`)}
               />
             ))}

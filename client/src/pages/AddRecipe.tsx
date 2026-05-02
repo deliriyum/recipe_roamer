@@ -6,13 +6,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { ImageUpload } from "@/components/ImageUpload";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-
-const CATEGORIES = ["Breakfast", "Lunch", "Dinner", "Desserts", "Salads", "Main Courses", "Sides", "Snacks", "Uncategorized"];
+import { PREDEFINED_TAGS } from "@/lib/tags";
 
 export default function AddRecipe() {
   const [, setLocation] = useLocation();
@@ -23,8 +21,8 @@ export default function AddRecipe() {
   const [prepTime, setPrepTime] = useState("");
   const [cookTime, setCookTime] = useState("");
   const [servings, setServings] = useState("");
-  const [category, setCategory] = useState("Uncategorized");
-  const [tags, setTags] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [customTagInput, setCustomTagInput] = useState("");
   const [ingredients, setIngredients] = useState<string[]>([""]);
   const [instructions, setInstructions] = useState<string[]>([""]);
 
@@ -43,19 +41,32 @@ export default function AddRecipe() {
     },
   });
 
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const addCustomTag = () => {
+    const tag = customTagInput.trim();
+    if (!tag || selectedTags.includes(tag)) { setCustomTagInput(""); return; }
+    setSelectedTags((prev) => [...prev, tag]);
+    setCustomTagInput("");
+  };
+
+  const removeCustomTag = (tag: string) => {
+    setSelectedTags((prev) => prev.filter((t) => t !== tag));
+  };
+
   const addIngredient = () => setIngredients([...ingredients, ""]);
   const updateIngredient = (i: number, v: string) => {
-    const next = [...ingredients];
-    next[i] = v;
-    setIngredients(next);
+    const next = [...ingredients]; next[i] = v; setIngredients(next);
   };
   const removeIngredient = (i: number) => setIngredients(ingredients.filter((_, idx) => idx !== i));
 
   const addInstruction = () => setInstructions([...instructions, ""]);
   const updateInstruction = (i: number, v: string) => {
-    const next = [...instructions];
-    next[i] = v;
-    setInstructions(next);
+    const next = [...instructions]; next[i] = v; setInstructions(next);
   };
   const removeInstruction = (i: number) => setInstructions(instructions.filter((_, idx) => idx !== i));
 
@@ -71,12 +82,14 @@ export default function AddRecipe() {
       prepTime: prepTime ? parseInt(prepTime) : null,
       cookTime: cookTime ? parseInt(cookTime) : null,
       servings: servings ? parseInt(servings) : 4,
-      category,
-      tags: tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : [],
+      category: selectedTags[0] ?? "Uncategorized",
+      tags: selectedTags,
       instructions: instructions.filter((i) => i.trim()),
       ingredients: ingredients.filter((i) => i.trim()),
     });
   };
+
+  const customTags = selectedTags.filter((t) => !PREDEFINED_TAGS.includes(t as typeof PREDEFINED_TAGS[number]));
 
   return (
     <div className="min-h-screen bg-background pb-20">
@@ -116,24 +129,64 @@ export default function AddRecipe() {
             <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)}
               placeholder="A brief description…" className="mt-2 min-h-20" data-testid="input-description" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label className="text-sm font-medium">Category</Label>
-              <Select value={category} onValueChange={setCategory}>
-                <SelectTrigger className="mt-2" data-testid="select-category">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                </SelectContent>
-              </Select>
+
+          <div>
+            <Label className="text-sm font-medium">Tags</Label>
+            <div className="flex flex-wrap gap-2 mt-2" data-testid="tag-picker">
+              {PREDEFINED_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggleTag(tag)}
+                  className={`px-3 py-1 text-sm rounded-full border transition-colors ${
+                    selectedTags.includes(tag)
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background text-foreground border-border hover-elevate"
+                  }`}
+                  data-testid={`tag-${tag.toLowerCase()}`}
+                >
+                  {tag}
+                </button>
+              ))}
             </div>
-            <div>
-              <Label htmlFor="tags" className="text-sm font-medium">Tags (comma-separated)</Label>
-              <Input id="tags" value={tags} onChange={(e) => setTags(e.target.value)}
-                placeholder="Quick, Vegetarian…" className="mt-2" data-testid="input-tags" />
+
+            {customTags.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {customTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="flex items-center gap-1 px-3 py-1 text-sm rounded-full bg-primary text-primary-foreground"
+                    data-testid={`tag-custom-${tag}`}
+                  >
+                    {tag}
+                    <button
+                      type="button"
+                      onClick={() => removeCustomTag(tag)}
+                      className="ml-1 opacity-70 hover:opacity-100"
+                      data-testid={`button-remove-tag-${tag}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-2">
+              <Input
+                value={customTagInput}
+                onChange={(e) => setCustomTagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomTag(); } }}
+                placeholder="Add custom tag…"
+                className="flex-1"
+                data-testid="input-custom-tag"
+              />
+              <Button variant="outline" size="default" onClick={addCustomTag} data-testid="button-add-custom-tag">
+                <Plus className="w-4 h-4 mr-1" />Add
+              </Button>
             </div>
           </div>
+
           <div className="grid grid-cols-3 gap-4">
             <div>
               <Label htmlFor="prepTime" className="text-sm font-medium">Prep Time (min)</Label>
@@ -165,7 +218,7 @@ export default function AddRecipe() {
             {ingredients.map((ing, i) => (
               <div key={i} className="flex gap-2">
                 <Input value={ing} onChange={(e) => updateIngredient(i, e.target.value)}
-                  placeholder={`e.g., 2 cups flour`} data-testid={`input-ingredient-${i}`} />
+                  placeholder="e.g., 2 cups flour" data-testid={`input-ingredient-${i}`} />
                 {ingredients.length > 1 && (
                   <Button variant="ghost" size="icon" onClick={() => removeIngredient(i)}
                     data-testid={`button-remove-ingredient-${i}`}>

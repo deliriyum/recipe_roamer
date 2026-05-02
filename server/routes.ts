@@ -168,12 +168,14 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
     servings: servings ?? 4,
     category: String((schema.recipeCategory as string) ?? "Uncategorized"),
     tags: (() => {
+      // keywords can be a string "a,b,c" or an array ["a,b,c"] or ["a","b","c"]
       const raw: string[] = Array.isArray(schema.keywords)
-        ? schema.keywords as string[]
+        ? (schema.keywords as string[]).flatMap(k => String(k).split(",").map(s => s.trim()))
         : schema.keywords ? String(schema.keywords).split(",").map(s => s.trim()) : [];
+      const PREDEFINED = ["breakfast","lunch","dinner","snack","soup","appetizer","dessert","pastry","party"];
       return raw
         .map(t => t.trim())
-        .filter(t => t.length > 0 && t.length <= 40 && !t.includes(":"));
+        .filter(t => t.length > 0 && !t.includes(":") && PREDEFINED.includes(t.toLowerCase()));
     })(),
     instructions: toStringArray(schema.recipeInstructions),
     calories: parseNutritionNum(nutr?.calories),
