@@ -412,7 +412,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
     const items: InsertShoppingListItem[] = recipe.recipeIngredients.map((ing) => ({
       ingredientName: ing.ingredientName,
-      quantity: ing.quantity != null ? Math.round(ing.quantity * ratio * 100) / 100 : null,
+      quantity: ing.quantity != null ? Math.ceil(ing.quantity * ratio) : null,
       unit: ing.unit ?? null,
       category: null,
       isChecked: false,
@@ -492,7 +492,7 @@ Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_
         );
         return {
           ingredientName: item.ingredient_name,
-          quantity: item.quantity,
+          quantity: item.quantity != null ? Math.ceil(item.quantity) : null,
           unit: item.unit,
           category: item.category,
           isChecked: !!pantryMatch,

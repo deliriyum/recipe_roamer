@@ -75,7 +75,7 @@ function AddMealDialog({ open, onClose, mealPlanId, dayOfWeek, mealSlot, existin
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans/week"] });
       toast({ title: "Meal added!" });
       onClose();
     },
@@ -87,7 +87,7 @@ function AddMealDialog({ open, onClose, mealPlanId, dayOfWeek, mealSlot, existin
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans/week"] });
       toast({ title: "Meal updated!" });
       onClose();
     },
@@ -98,7 +98,7 @@ function AddMealDialog({ open, onClose, mealPlanId, dayOfWeek, mealSlot, existin
       await apiRequest("DELETE", `/api/meal-plans/${mealPlanId}/entries/${existingEntry!.id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans/week"] });
       toast({ title: "Meal removed." });
       onClose();
     },
