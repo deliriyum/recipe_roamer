@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Link as LinkIcon, FileJson, Camera } from "lucide-react";
+import { ArrowLeft, Link as LinkIcon, FileJson, Camera, CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,56 +8,106 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocation } from "wouter";
 import { ImageUpload } from "@/components/ImageUpload";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import type { RecipeWithIngredients } from "@shared/schema";
 import handwrittenRecipe from "@assets/generated_images/handwritten_recipe_card_example_9ba00a61.png";
 
 export default function ImportRecipe() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
   const [url, setUrl] = useState("");
   const [jsonInput, setJsonInput] = useState("");
   const [ocrImage, setOcrImage] = useState<string>();
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [extractedText, setExtractedText] = useState("");
+  const [imported, setImported] = useState<RecipeWithIngredients | null>(null);
 
-  const handleUrlImport = () => {
-    console.log("Importing from URL:", url);
-    setLocation("/");
+  const onSuccess = (recipe: RecipeWithIngredients) => {
+    queryClient.invalidateQueries({ queryKey: ["/api/recipes"] });
+    setImported(recipe);
+    toast({
+      title: "Recipe imported!",
+      description: `"${recipe.title}" has been added to your collection.`,
+    });
   };
 
-  const handleJsonImport = () => {
-    console.log("Importing from JSON:", jsonInput);
-    setLocation("/");
-  };
+  const urlMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/import/url", { url });
+      return res.json() as Promise<RecipeWithIngredients>;
+    },
+    onSuccess,
+    onError: (err) =>
+      toast({ title: "Import failed", description: String(err), variant: "destructive" }),
+  });
 
-  const handleOcrProcess = () => {
-    if (!ocrImage) return;
-    
-    setIsProcessing(true);
-    
-    // TODO: remove mock functionality - simulate OCR processing
-    setTimeout(() => {
-      setExtractedText(`Chocolate Chip Cookies
+  const jsonMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/import/json", { json: jsonInput });
+      return res.json() as Promise<RecipeWithIngredients>;
+    },
+    onSuccess,
+    onError: (err) =>
+      toast({ title: "Import failed", description: String(err), variant: "destructive" }),
+  });
 
-Ingredients:
-- 2 1/4 cups all-purpose flour
-- 1 cup butter, softened
-- 3/4 cup sugar
-- 2 eggs
-- 2 tsp vanilla extract
-- 1 tsp baking soda
-- 1/2 tsp salt
-- 2 cups chocolate chips
+  const ocrMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/import/ocr", { imageBase64: ocrImage });
+      return res.json() as Promise<RecipeWithIngredients>;
+    },
+    onSuccess,
+    onError: (err) =>
+      toast({ title: "OCR failed", description: String(err), variant: "destructive" }),
+  });
 
-Instructions:
-1. Preheat oven to 375°F
-2. Cream butter and sugar until fluffy
-3. Beat in eggs and vanilla
-4. Mix in dry ingredients
-5. Fold in chocolate chips
-6. Drop spoonfuls onto baking sheet
-7. Bake for 9-11 minutes`);
-      setIsProcessing(false);
-    }, 2000);
-  };
+  if (imported) {
+    return (
+      <div className="min-h-screen bg-background pb-20 flex items-center justify-center p-6">
+        <div className="max-w-sm w-full text-center space-y-6">
+          <CheckCircle className="w-16 h-16 text-primary mx-auto" />
+          <div>
+            <h2 className="font-serif text-2xl font-bold mb-1">Recipe Imported!</h2>
+            <p className="text-muted-foreground text-sm">
+              "{imported.title}" has been added to your collection.
+            </p>
+          </div>
+          <Card className="p-4 text-left space-y-2">
+            <p className="font-semibold text-sm">{imported.title}</p>
+            <div className="text-xs text-muted-foreground space-y-1">
+              {imported.prepTime != null && <p>Prep: {imported.prepTime} min</p>}
+              {imported.cookTime != null && <p>Cook: {imported.cookTime} min</p>}
+              <p>Servings: {imported.servings}</p>
+              <p>{imported.recipeIngredients.length} ingredients · {imported.instructions?.length ?? 0} steps</p>
+            </div>
+          </Card>
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                setImported(null);
+                setUrl("");
+                setJsonInput("");
+                setOcrImage(undefined);
+              }}
+              data-testid="button-import-another"
+            >
+              Import Another
+            </Button>
+            <Button
+              className="flex-1"
+              onClick={() => setLocation(`/recipe/${imported.id}`)}
+              data-testid="button-view-recipe"
+            >
+              View Recipe
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background pb-20">
@@ -79,85 +129,89 @@ Instructions:
         <Tabs defaultValue="url" className="space-y-6">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="url" data-testid="tab-url">
-              <LinkIcon className="w-4 h-4 mr-2" />
-              URL
+              <LinkIcon className="w-4 h-4 mr-2" />URL
             </TabsTrigger>
             <TabsTrigger value="json" data-testid="tab-json">
-              <FileJson className="w-4 h-4 mr-2" />
-              JSON
+              <FileJson className="w-4 h-4 mr-2" />JSON
             </TabsTrigger>
             <TabsTrigger value="ocr" data-testid="tab-ocr">
-              <Camera className="w-4 h-4 mr-2" />
-              OCR
+              <Camera className="w-4 h-4 mr-2" />Photo
             </TabsTrigger>
           </TabsList>
 
+          {/* ── URL TAB ── */}
           <TabsContent value="url" className="space-y-4">
             <Card className="p-6 space-y-4">
               <div>
-                <Label htmlFor="url" className="text-base font-semibold">
-                  Recipe URL
-                </Label>
+                <Label htmlFor="url" className="text-base font-semibold">Recipe URL</Label>
                 <p className="text-sm text-muted-foreground mt-1 mb-3">
-                  Paste a URL from popular recipe sites that support Schema.org Recipe format
+                  Paste a link from any recipe website. We'll extract it automatically — works best with sites that use Schema.org (AllRecipes, Food Network, NYT Cooking, etc.).
                 </p>
                 <Input
                   id="url"
                   type="url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://example.com/recipe"
+                  onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) urlMutation.mutate(); }}
+                  placeholder="https://www.allrecipes.com/recipe/…"
                   data-testid="input-url"
                 />
               </div>
               <Button
-                onClick={handleUrlImport}
-                disabled={!url}
+                onClick={() => urlMutation.mutate()}
+                disabled={!url.trim() || urlMutation.isPending}
                 className="w-full"
                 data-testid="button-import-url"
               >
-                Import from URL
+                {urlMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Fetching &amp; Parsing…</>
+                ) : "Import from URL"}
               </Button>
+              {urlMutation.isPending && (
+                <p className="text-xs text-center text-muted-foreground">
+                  Fetching the page and extracting recipe data — this takes a few seconds…
+                </p>
+              )}
             </Card>
           </TabsContent>
 
+          {/* ── JSON TAB ── */}
           <TabsContent value="json" className="space-y-4">
             <Card className="p-6 space-y-4">
               <div>
-                <Label htmlFor="json" className="text-base font-semibold">
-                  Recipe JSON
-                </Label>
+                <Label htmlFor="json" className="text-base font-semibold">Recipe JSON</Label>
                 <p className="text-sm text-muted-foreground mt-1 mb-3">
-                  Paste Schema.org Recipe JSON-LD format
+                  Paste Schema.org Recipe JSON-LD (the structured data embedded in recipe sites). You can find it by right-clicking any recipe page → View Source → search for <code className="bg-muted px-1 rounded text-xs">"@type":"Recipe"</code>.
                 </p>
                 <Textarea
                   id="json"
                   value={jsonInput}
                   onChange={(e) => setJsonInput(e.target.value)}
-                  placeholder='{"@type": "Recipe", "name": "...", ...}'
+                  placeholder={'{\n  "@type": "Recipe",\n  "name": "…",\n  "recipeIngredient": […],\n  …\n}'}
                   className="font-mono text-sm min-h-48"
                   data-testid="input-json"
                 />
               </div>
               <Button
-                onClick={handleJsonImport}
-                disabled={!jsonInput}
+                onClick={() => jsonMutation.mutate()}
+                disabled={!jsonInput.trim() || jsonMutation.isPending}
                 className="w-full"
                 data-testid="button-import-json"
               >
-                Import from JSON
+                {jsonMutation.isPending ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Parsing…</>
+                ) : "Import from JSON"}
               </Button>
             </Card>
           </TabsContent>
 
+          {/* ── OCR TAB ── */}
           <TabsContent value="ocr" className="space-y-4">
             <Card className="p-6 space-y-4">
               <div>
-                <Label className="text-base font-semibold">
-                  Upload Recipe Image
-                </Label>
+                <Label className="text-base font-semibold">Upload Recipe Photo</Label>
                 <p className="text-sm text-muted-foreground mt-1 mb-3">
-                  Upload a photo of a handwritten or printed recipe, and we'll extract the text using AI
+                  Take a photo of a handwritten or printed recipe card and AI will extract all the details automatically.
                 </p>
                 {!ocrImage && (
                   <div className="mb-4 p-4 bg-muted rounded-lg">
@@ -167,72 +221,29 @@ Instructions:
                       className="w-full rounded-md"
                     />
                     <p className="text-xs text-muted-foreground text-center mt-2">
-                      Example: Handwritten recipe card
+                      Example: handwritten recipe card
                     </p>
                   </div>
                 )}
                 <ImageUpload value={ocrImage} onChange={setOcrImage} />
               </div>
 
-              {ocrImage && !extractedText && (
+              {ocrImage && (
                 <Button
-                  onClick={handleOcrProcess}
-                  disabled={isProcessing}
+                  onClick={() => ocrMutation.mutate()}
+                  disabled={ocrMutation.isPending}
                   className="w-full"
                   data-testid="button-process-ocr"
                 >
-                  {isProcessing ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin mr-2" />
-                      Analyzing Recipe...
-                    </>
-                  ) : (
-                    "Extract Text from Image"
-                  )}
+                  {ocrMutation.isPending ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analyzing Image…</>
+                  ) : "Extract &amp; Import Recipe"}
                 </Button>
               )}
-
-              {extractedText && (
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="extracted" className="text-base font-semibold">
-                      Extracted Text
-                    </Label>
-                    <p className="text-sm text-muted-foreground mt-1 mb-3">
-                      Review and edit the extracted text before creating the recipe
-                    </p>
-                    <Textarea
-                      id="extracted"
-                      value={extractedText}
-                      onChange={(e) => setExtractedText(e.target.value)}
-                      className="min-h-64 font-mono text-sm"
-                      data-testid="textarea-extracted-text"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setExtractedText("");
-                        setOcrImage(undefined);
-                      }}
-                      className="flex-1"
-                      data-testid="button-try-again"
-                    >
-                      Try Again
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        console.log("Creating recipe from OCR:", extractedText);
-                        setLocation("/add");
-                      }}
-                      className="flex-1"
-                      data-testid="button-create-recipe"
-                    >
-                      Create Recipe
-                    </Button>
-                  </div>
-                </div>
+              {ocrMutation.isPending && (
+                <p className="text-xs text-center text-muted-foreground">
+                  AI is reading your recipe photo — usually takes 5–10 seconds…
+                </p>
               )}
             </Card>
           </TabsContent>
