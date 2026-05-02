@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Plus, X } from "lucide-react";
+import { ArrowLeft, Plus, X, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -88,9 +88,14 @@ export default function AddRecipe() {
             </Button>
             <h1 className="font-serif text-2xl font-bold">Add Recipe</h1>
           </div>
-          <Button onClick={handleSubmit} disabled={createMutation.isPending} data-testid="button-save-recipe">
-            {createMutation.isPending ? "Saving…" : "Save Recipe"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setLocation("/import")} data-testid="button-go-import">
+              <LinkIcon className="w-4 h-4 mr-2" />Import
+            </Button>
+            <Button onClick={handleSubmit} disabled={createMutation.isPending} data-testid="button-save-recipe">
+              {createMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
         </div>
       </header>
 
