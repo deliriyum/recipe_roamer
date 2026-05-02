@@ -119,106 +119,101 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
   };
 }
 
+// Helper: wraps async Express handlers so thrown errors reach next()
+function wrap(fn: (req: any, res: any) => Promise<void>) {
+  return (req: any, res: any, next: any) => fn(req, res).catch(next);
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // ── IMPORT ───────────────────────────────────────────────────────────────────
 
-  app.post("/api/import/url", async (req, res) => {
-    const { url } = req.body as { url: string };
-    if (!url) return res.status(400).json({ error: "url required" });
+  app.post("/api/import/url", wrap(async (req, res) => {
+    const { url } = (req.body ?? {}) as { url?: string };
+    if (!url) { res.status(400).json({ error: "url required" }); return; }
+
+    // Fetch the page
+    let html: string;
     try {
-      const html = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; RecipeRoamer/1.0)" },
-      }).then((r) => r.text());
-
-      // Try Schema.org JSON-LD first
-      const jsonLdMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
-      for (const match of jsonLdMatches) {
-        try {
-          let data = JSON.parse(match[1]);
-          if (Array.isArray(data)) data = data.find((d: any) => d["@type"] === "Recipe") ?? data[0];
-          if (data["@graph"]) data = (data["@graph"] as any[]).find((d: any) => d["@type"] === "Recipe") ?? data;
-          if (data["@type"] === "Recipe") {
-            const parsed = schemaOrgToRecipe(data);
-            const recipe = await storage.createRecipe(parsed, parsed.ingredients);
-            return res.status(201).json(recipe);
-          }
-        } catch { /* continue to next match */ }
-      }
-
-      // Fallback: strip HTML tags and send to OpenAI
-      const text = html
-        .replace(/<script[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-
-      const parsed = await parseRecipeWithOpenAI(text, "webpage text");
-      const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
-      return res.status(201).json(recipe);
-    } catch (err) {
-      console.error("URL import error:", err);
-      res.status(500).json({ error: `Failed to import recipe: ${String(err)}` });
-    }
-  });
-
-  app.post("/api/import/json", async (req, res) => {
-    const { json } = req.body as { json: string };
-    if (!json) return res.status(400).json({ error: "json required" });
-    try {
-      let data = JSON.parse(json);
-      if (Array.isArray(data)) data = data.find((d: any) => d["@type"] === "Recipe") ?? data[0];
-      if (data["@graph"]) data = (data["@graph"] as any[]).find((d: any) => d["@type"] === "Recipe") ?? data;
-      const parsed = data["@type"] === "Recipe"
-        ? schemaOrgToRecipe(data)
-        : await parseRecipeWithOpenAI(json, "JSON data");
-      const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
-      res.status(201).json(recipe);
-    } catch (err) {
-      res.status(400).json({ error: `Failed to parse JSON: ${String(err)}` });
-    }
-  });
-
-  app.post("/api/import/ocr", async (req, res) => {
-    const { imageBase64 } = req.body as { imageBase64: string };
-    if (!imageBase64) return res.status(400).json({ error: "imageBase64 required" });
-    try {
-      const dataUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Extract the complete recipe from this image. Return ONLY valid JSON with this shape:
-{
-  "title": string,
-  "description": string | null,
-  "prepTime": number | null,
-  "cookTime": number | null,
-  "servings": number | null,
-  "category": string,
-  "tags": string[],
-  "instructions": string[],
-  "ingredients": [{ "ingredientName": string, "quantity": number | null, "unit": string | null, "notes": string | null }]
-}`,
-              },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        response_format: { type: "json_object" },
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(15000),
       });
-      const parsed = JSON.parse(response.choices[0].message.content ?? "{}");
-      const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
-      res.status(201).json(recipe);
+      if (!response.ok && response.status !== 402) {
+        res.status(502).json({ error: `Could not fetch page: HTTP ${response.status}` }); return;
+      }
+      html = await response.text();
     } catch (err) {
-      console.error("OCR import error:", err);
-      res.status(500).json({ error: `Failed to process image: ${String(err)}` });
+      console.error("URL fetch error:", err);
+      res.status(502).json({ error: `Could not reach URL: ${String(err)}` }); return;
     }
-  });
+
+    // Try Schema.org JSON-LD first
+    const jsonLdRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    for (const match of html.matchAll(jsonLdRe)) {
+      try {
+        let data = JSON.parse(match[1]);
+        if (Array.isArray(data)) data = data.find((d: any) => d["@type"] === "Recipe") ?? null;
+        if (data?.["@graph"]) data = (data["@graph"] as any[]).find((d: any) => d["@type"] === "Recipe") ?? null;
+        if (data?.["@type"] === "Recipe") {
+          const parsed = schemaOrgToRecipe(data);
+          const recipe = await storage.createRecipe(parsed, parsed.ingredients);
+          res.status(201).json(recipe); return;
+        }
+      } catch { /* try next block */ }
+    }
+
+    // Fallback: strip HTML and ask OpenAI
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    const parsed = await parseRecipeWithOpenAI(text, "webpage text");
+    const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
+    res.status(201).json(recipe);
+  }));
+
+  app.post("/api/import/json", wrap(async (req, res) => {
+    const { json } = (req.body ?? {}) as { json?: string };
+    if (!json) { res.status(400).json({ error: "json required" }); return; }
+    let data: any;
+    try { data = JSON.parse(json); } catch {
+      res.status(400).json({ error: "Invalid JSON" }); return;
+    }
+    if (Array.isArray(data)) data = data.find((d: any) => d["@type"] === "Recipe") ?? data[0];
+    if (data?.["@graph"]) data = (data["@graph"] as any[]).find((d: any) => d["@type"] === "Recipe") ?? data;
+    const parsed = data?.["@type"] === "Recipe"
+      ? schemaOrgToRecipe(data)
+      : await parseRecipeWithOpenAI(json, "JSON data");
+    const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
+    res.status(201).json(recipe);
+  }));
+
+  app.post("/api/import/ocr", wrap(async (req, res) => {
+    const { imageBase64 } = (req.body ?? {}) as { imageBase64?: string };
+    if (!imageBase64) { res.status(400).json({ error: "imageBase64 required" }); return; }
+    const dataUrl = imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Extract the complete recipe from this image. Return ONLY valid JSON:
+{ "title": string, "description": string|null, "prepTime": number|null, "cookTime": number|null, "servings": number|null, "category": string, "tags": string[], "instructions": string[], "ingredients": [{"ingredientName":string,"quantity":number|null,"unit":string|null,"notes":string|null}] }`,
+          },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ],
+      }],
+      response_format: { type: "json_object" },
+    });
+    const parsed = JSON.parse(response.choices[0].message.content ?? "{}");
+    const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
+    res.status(201).json(recipe);
+  }));
 
   // ── RECIPES ─────────────────────────────────────────────────────────────────
 
