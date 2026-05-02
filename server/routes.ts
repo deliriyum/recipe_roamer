@@ -106,9 +106,27 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
     return isNaN(n) ? null : n;
   })();
 
+  // Extract image URL — can be string, string[], or ImageObject / ImageObject[]
+  const extractImageUrl = (img: unknown): string | null => {
+    if (!img) return null;
+    if (typeof img === "string") return img;
+    if (Array.isArray(img)) {
+      for (const item of img) {
+        const found = extractImageUrl(item);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof img === "object" && img !== null) {
+      return (img as any).url ?? (img as any).contentUrl ?? null;
+    }
+    return null;
+  };
+
   return {
     title: String(schema.name ?? "Untitled Recipe"),
     description: schema.description ? String(schema.description) : null,
+    imageUrl: extractImageUrl(schema.image),
     prepTime: toMins(schema.prepTime),
     cookTime: toMins(schema.cookTime),
     servings: servings ?? 4,
@@ -162,6 +180,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch { /* try next block */ }
     }
 
+    // Grab og:image / twitter:image before stripping tags
+    const ogImageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+      ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
+      ?? html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
+    const ogImage = ogImageMatch?.[1] ?? null;
+
     // Fallback: strip HTML and ask OpenAI
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -171,7 +195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .trim();
 
     const parsed = await parseRecipeWithOpenAI(text, "webpage text");
-    const recipe = await storage.createRecipe(parsed, parsed.ingredients ?? []);
+    const recipe = await storage.createRecipe({ ...parsed, imageUrl: parsed.imageUrl ?? ogImage }, parsed.ingredients ?? []);
     res.status(201).json(recipe);
   }));
 
