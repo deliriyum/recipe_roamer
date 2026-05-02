@@ -41,7 +41,7 @@ export default function RecipeDetail() {
         title: "Added to shopping list",
         description: `${recipe!.recipeIngredients.length} ingredients added.`,
         action: (
-          <Button variant="outline" size="sm" onClick={() => setLocation("/shopping")}>
+          <Button variant="outline" size="sm" onClick={() => setLocation("/shopping-list")}>
             View List
           </Button>
         ),
@@ -80,12 +80,12 @@ export default function RecipeDetail() {
     <div className="min-h-screen bg-background pb-20">
       <div className="relative">
         {recipe.imageUrl ? (
-          <div className="aspect-video bg-muted overflow-hidden">
+          <div className="w-full bg-muted overflow-hidden" style={{ height: "min(50vw, 220px)" }}>
             <img src={recipe.imageUrl} alt={recipe.title} className="w-full h-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/20" />
           </div>
         ) : (
-          <div className="aspect-video bg-muted flex items-center justify-center">
+          <div className="w-full bg-muted flex items-center justify-center" style={{ height: "min(50vw, 220px)" }}>
             <span className="text-muted-foreground text-lg font-serif">{recipe.category}</span>
           </div>
         )}
