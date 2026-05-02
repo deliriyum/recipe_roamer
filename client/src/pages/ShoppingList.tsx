@@ -214,6 +214,17 @@ export default function ShoppingList() {
     },
   });
 
+  const checkAllMutation = useMutation({
+    mutationFn: async (isChecked: boolean) => {
+      await apiRequest("PUT", `/api/shopping-lists/${activeListId}/check-all`, { isChecked });
+    },
+    onSuccess: (_, isChecked) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists", activeListId] });
+      if (isChecked) setShowPantryBanner(true);
+      else setShowPantryBanner(false);
+    },
+  });
+
   const checkedItems = activeList?.items.filter((i) => i.isChecked) ?? [];
   const grouped = groupByCategory(activeList?.items ?? []);
 
@@ -249,6 +260,20 @@ export default function ShoppingList() {
                 data-testid="button-generate-from-plan">
                 <RefreshCw className="w-4 h-4 mr-1" />Generate from Plan
               </Button>
+              {activeListId && activeList && activeList.items.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const allChecked = activeList.items.every((i) => i.isChecked);
+                    checkAllMutation.mutate(!allChecked);
+                  }}
+                  disabled={checkAllMutation.isPending}
+                  data-testid="button-select-all"
+                >
+                  {activeList.items.every((i) => i.isChecked) ? "Deselect All" : "Select All"}
+                </Button>
+              )}
               {activeListId && (
                 <Button variant="outline" size="sm" onClick={() => clearCheckedMutation.mutate()}
                   disabled={checkedItems.length === 0 || clearCheckedMutation.isPending}

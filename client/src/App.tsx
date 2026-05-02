@@ -8,6 +8,7 @@ import { BottomNav } from "@/components/BottomNav";
 import RecipesList from "@/pages/RecipesList";
 import RecipeDetail from "@/pages/RecipeDetail";
 import AddRecipe from "@/pages/AddRecipe";
+import EditRecipe from "@/pages/EditRecipe";
 import ImportRecipe from "@/pages/ImportRecipe";
 import MealPlanner from "@/pages/MealPlanner";
 import ShoppingList from "@/pages/ShoppingList";
@@ -19,6 +20,7 @@ function Router() {
     <Switch>
       <Route path="/" component={RecipesList} />
       <Route path="/recipe/:id" component={RecipeDetail} />
+      <Route path="/edit/:id" component={EditRecipe} />
       <Route path="/add" component={AddRecipe} />
       <Route path="/import" component={ImportRecipe} />
       <Route path="/meal-planner" component={MealPlanner} />

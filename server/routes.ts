@@ -172,10 +172,12 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
       const raw: string[] = Array.isArray(schema.keywords)
         ? (schema.keywords as string[]).flatMap(k => String(k).split(",").map(s => s.trim()))
         : schema.keywords ? String(schema.keywords).split(",").map(s => s.trim()) : [];
-      const PREDEFINED = ["breakfast","lunch","dinner","snack","soup","appetizer","dessert","pastry","party"];
+      const PREDEFINED_LOWER = ["breakfast","lunch","dinner","snack","soup","appetizer","dessert","pastry","party"];
+      const PREDEFINED_TITLE = ["Breakfast","Lunch","Dinner","Snack","Soup","Appetizer","Dessert","Pastry","Party"];
       return raw
         .map(t => t.trim())
-        .filter(t => t.length > 0 && !t.includes(":") && PREDEFINED.includes(t.toLowerCase()));
+        .map(t => { const i = PREDEFINED_LOWER.indexOf(t.toLowerCase()); return i !== -1 ? PREDEFINED_TITLE[i] : null; })
+        .filter((t): t is string => t !== null);
     })(),
     instructions: toStringArray(schema.recipeInstructions),
     calories: parseNutritionNum(nutr?.calories),
@@ -608,6 +610,12 @@ Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_
 
   app.delete("/api/shopping-lists/:id/checked", async (req, res) => {
     await storage.clearCheckedItems(req.params.id);
+    res.status(204).send();
+  });
+
+  app.put("/api/shopping-lists/:id/check-all", async (req, res) => {
+    const { isChecked } = req.body;
+    await storage.checkAllItems(req.params.id, !!isChecked);
     res.status(204).send();
   });
 

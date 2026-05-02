@@ -34,6 +34,7 @@ export interface IStorage {
   addShoppingListItem(listId: string, data: InsertShoppingListItem): Promise<ShoppingListItem>;
   deleteShoppingListItem(listId: string, itemId: string): Promise<void>;
   clearCheckedItems(listId: string): Promise<void>;
+  checkAllItems(listId: string, isChecked: boolean): Promise<void>;
 
   // Pantry
   getPantryItems(): Promise<PantryItem[]>;
@@ -298,6 +299,11 @@ export class MemStorage implements IStorage {
   async clearCheckedItems(listId: string): Promise<void> {
     const items = this.shoppingListItems.get(listId) ?? [];
     this.shoppingListItems.set(listId, items.filter((i) => !i.isChecked));
+  }
+
+  async checkAllItems(listId: string, isChecked: boolean): Promise<void> {
+    const items = this.shoppingListItems.get(listId) ?? [];
+    this.shoppingListItems.set(listId, items.map((i) => ({ ...i, isChecked })));
   }
 
   async getPantryItems(): Promise<PantryItem[]> {

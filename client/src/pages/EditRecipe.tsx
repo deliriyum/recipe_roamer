@@ -1,0 +1,352 @@
+import { useState, useEffect } from "react";
+import { ArrowLeft, Plus, X, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Card } from "@/components/ui/card";
+import { ImageUpload } from "@/components/ImageUpload";
+import { Label } from "@/components/ui/label";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useLocation, useParams } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { PREDEFINED_TAGS } from "@/lib/tags";
+import type { RecipeWithIngredients, RecipeIngredient } from "@shared/schema";
+
+function ingredientToString(ing: RecipeIngredient): string {
+  const parts: string[] = [];
+  if (ing.quantity != null) parts.push(String(ing.quantity));
+  if (ing.unit) parts.push(ing.unit);
+  parts.push(ing.ingredientName);
+  if (ing.notes) parts.push(`(${ing.notes})`);
+  return parts.join(" ");
+}
+
+function normalizeTag(tag: string): string {
+  const match = PREDEFINED_TAGS.find((p) => p.toLowerCase() === tag.toLowerCase());
+  return match ?? tag;
+}
+
+export default function EditRecipe() {
+  const [, setLocation] = useLocation();
+  const params = useParams<{ id: string }>();
+  const { toast } = useToast();
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [image, setImage] = useState<string | undefined>();
+  const [prepTime, setPrepTime] = useState("");
+  const [cookTime, setCookTime] = useState("");
+  const [servings, setServings] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [customTagInput, setCustomTagInput] = useState("");
+  const [ingredients, setIngredients] = useState<string[]>([""]);
+  const [instructions, setInstructions] = useState<string[]>([""]);
+  const [ready, setReady] = useState(false);
+
+  const { data: recipe, isLoading } = useQuery<RecipeWithIngredients>({
+    queryKey: ["/api/recipes", params.id],
+  });
+
+  useEffect(() => {
+    if (recipe && !ready) {
+      setTitle(recipe.title);
+      setDescription(recipe.description ?? "");
+      setImage(recipe.imageUrl ?? undefined);
+      setPrepTime(recipe.prepTime != null ? String(recipe.prepTime) : "");
+      setCookTime(recipe.cookTime != null ? String(recipe.cookTime) : "");
+      setServings(String(recipe.servings ?? 4));
+      setSelectedTags((recipe.tags ?? []).map(normalizeTag));
+      setIngredients(
+        recipe.recipeIngredients.length > 0
+          ? recipe.recipeIngredients.map(ingredientToString)
+          : [""]
+      );
+      setInstructions(
+        recipe.instructions && recipe.instructions.length > 0
+          ? recipe.instructions
+          : [""]
+      );
+      setReady(true);
+    }
+  }, [recipe, ready]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: unknown) => {
+      const res = await apiRequest("PUT", `/api/recipes/${params.id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recipes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/recipes", params.id] });
+      toast({ title: "Recipe updated!" });
+      setLocation(`/recipe/${params.id}`);
+    },
+    onError: (err) => {
+      toast({ title: "Error saving recipe", description: String(err), variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/recipes/${params.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recipes"] });
+      toast({ title: "Recipe deleted" });
+      setLocation("/");
+    },
+    onError: () => {
+      toast({ title: "Error deleting recipe", variant: "destructive" });
+    },
+  });
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const addCustomTag = () => {
+    const tag = customTagInput.trim();
+    if (!tag || selectedTags.includes(tag)) { setCustomTagInput(""); return; }
+    setSelectedTags((prev) => [...prev, tag]);
+    setCustomTagInput("");
+  };
+
+  const removeCustomTag = (tag: string) => setSelectedTags((prev) => prev.filter((t) => t !== tag));
+
+  const addIngredient = () => setIngredients([...ingredients, ""]);
+  const updateIngredient = (i: number, v: string) => {
+    const next = [...ingredients]; next[i] = v; setIngredients(next);
+  };
+  const removeIngredient = (i: number) => setIngredients(ingredients.filter((_, idx) => idx !== i));
+
+  const addInstruction = () => setInstructions([...instructions, ""]);
+  const updateInstruction = (i: number, v: string) => {
+    const next = [...instructions]; next[i] = v; setInstructions(next);
+  };
+  const removeInstruction = (i: number) => setInstructions(instructions.filter((_, idx) => idx !== i));
+
+  const handleSave = () => {
+    if (!title.trim()) {
+      toast({ title: "Title required", variant: "destructive" });
+      return;
+    }
+    saveMutation.mutate({
+      title: title.trim(),
+      description: description.trim() || null,
+      imageUrl: image ?? null,
+      prepTime: prepTime ? parseInt(prepTime) : null,
+      cookTime: cookTime ? parseInt(cookTime) : null,
+      servings: servings ? parseInt(servings) : 4,
+      category: selectedTags[0] ?? "Uncategorized",
+      tags: selectedTags,
+      instructions: instructions.filter((i) => i.trim()),
+      ingredients: ingredients.filter((i) => i.trim()),
+    });
+  };
+
+  const customTags = selectedTags.filter(
+    (t) => !PREDEFINED_TAGS.includes(t as typeof PREDEFINED_TAGS[number])
+  );
+
+  if (isLoading || !ready) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p className="text-muted-foreground">Loading recipe…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background pb-20">
+      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b border-border">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={() => setLocation(`/recipe/${params.id}`)}
+              data-testid="button-back">
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <h1 className="font-serif text-2xl font-bold">Edit Recipe</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={() => setShowDeleteDialog(true)}
+              data-testid="button-delete-recipe" title="Delete recipe">
+              <Trash2 className="w-5 h-5 text-destructive" />
+            </Button>
+            <Button onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-save-recipe">
+              {saveMutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <Card className="p-6">
+          <Label className="text-base font-semibold mb-2 block">Recipe Image</Label>
+          <ImageUpload value={image} onChange={setImage} />
+        </Card>
+
+        <Card className="p-6 space-y-4">
+          <div>
+            <Label htmlFor="title" className="text-base font-semibold">Recipe Title</Label>
+            <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g., Chocolate Chip Cookies" className="mt-2" data-testid="input-title" />
+          </div>
+          <div>
+            <Label htmlFor="description" className="text-base font-semibold">Description (Optional)</Label>
+            <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)}
+              placeholder="A brief description…" className="mt-2 min-h-20" data-testid="input-description" />
+          </div>
+
+          <div>
+            <Label className="text-sm font-medium">Tags</Label>
+            <div className="flex flex-wrap gap-2 mt-2" data-testid="tag-picker">
+              {PREDEFINED_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggleTag(tag)}
+                  className={`px-3 py-1 text-sm rounded-full border transition-colors ${
+                    selectedTags.includes(tag)
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background text-foreground border-border hover-elevate"
+                  }`}
+                  data-testid={`tag-${tag.toLowerCase()}`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+
+            {customTags.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {customTags.map((tag) => (
+                  <span key={tag}
+                    className="flex items-center gap-1 px-3 py-1 text-sm rounded-full bg-primary text-primary-foreground">
+                    {tag}
+                    <button type="button" onClick={() => removeCustomTag(tag)}
+                      className="ml-1 opacity-70 hover:opacity-100">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-2">
+              <Input
+                value={customTagInput}
+                onChange={(e) => setCustomTagInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomTag(); } }}
+                placeholder="Add custom tag…"
+                className="flex-1"
+                data-testid="input-custom-tag"
+              />
+              <Button variant="outline" size="default" onClick={addCustomTag} data-testid="button-add-custom-tag">
+                <Plus className="w-4 h-4 mr-1" />Add
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <Label htmlFor="prepTime" className="text-sm font-medium">Prep Time (min)</Label>
+              <Input id="prepTime" type="number" value={prepTime} onChange={(e) => setPrepTime(e.target.value)}
+                placeholder="15" className="mt-2" data-testid="input-prep-time" />
+            </div>
+            <div>
+              <Label htmlFor="cookTime" className="text-sm font-medium">Cook Time (min)</Label>
+              <Input id="cookTime" type="number" value={cookTime} onChange={(e) => setCookTime(e.target.value)}
+                placeholder="30" className="mt-2" data-testid="input-cook-time" />
+            </div>
+            <div>
+              <Label htmlFor="servings" className="text-sm font-medium">Servings</Label>
+              <Input id="servings" type="number" value={servings} onChange={(e) => setServings(e.target.value)}
+                placeholder="4" className="mt-2" data-testid="input-servings" />
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <Label className="text-base font-semibold">Ingredients</Label>
+            <Button variant="outline" size="sm" onClick={addIngredient} data-testid="button-add-ingredient">
+              <Plus className="w-4 h-4 mr-1" />Add
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">Format: "2 cups flour" — quantity, unit, name</p>
+          <div className="space-y-3">
+            {ingredients.map((ing, i) => (
+              <div key={i} className="flex gap-2">
+                <Input value={ing} onChange={(e) => updateIngredient(i, e.target.value)}
+                  placeholder="e.g., 2 cups flour" data-testid={`input-ingredient-${i}`} />
+                {ingredients.length > 1 && (
+                  <Button variant="ghost" size="icon" onClick={() => removeIngredient(i)}
+                    data-testid={`button-remove-ingredient-${i}`}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <Label className="text-base font-semibold">Instructions</Label>
+            <Button variant="outline" size="sm" onClick={addInstruction} data-testid="button-add-instruction">
+              <Plus className="w-4 h-4 mr-1" />Add Step
+            </Button>
+          </div>
+          <div className="space-y-3">
+            {instructions.map((ins, i) => (
+              <div key={i} className="flex gap-2">
+                <div className="flex-shrink-0 w-8 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-semibold text-sm">
+                  {i + 1}
+                </div>
+                <Textarea value={ins} onChange={(e) => updateInstruction(i, e.target.value)}
+                  placeholder={`Step ${i + 1}`} className="min-h-9 resize-none" rows={2}
+                  data-testid={`input-instruction-${i}`} />
+                {instructions.length > 1 && (
+                  <Button variant="ghost" size="icon" onClick={() => removeInstruction(i)}
+                    data-testid={`button-remove-instruction-${i}`}>
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      </main>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-serif">Delete Recipe?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{title}" will be permanently removed from your collection. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteMutation.mutate()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

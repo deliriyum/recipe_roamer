@@ -123,7 +123,7 @@ export default function RecipeDetail() {
             variant="ghost"
             size="icon"
             className="bg-background/90 backdrop-blur-sm"
-            onClick={() => console.log("Edit recipe:", recipe.id)}
+            onClick={() => setLocation(`/edit/${recipe.id}`)}
             data-testid="button-edit"
           >
             <Edit className="w-5 h-5" />
