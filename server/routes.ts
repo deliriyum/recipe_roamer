@@ -36,6 +36,7 @@ function parseIngredientStrings(strings: string[]) {
 async function parseRecipeWithOpenAI(content: string, hint = "recipe text"): Promise<{
   title: string; description?: string; prepTime?: number; cookTime?: number;
   servings?: number; category?: string; tags?: string[]; instructions?: string[];
+  calories?: number | null; protein?: number | null; carbs?: number | null; fats?: number | null;
   ingredients?: Array<{ ingredientName: string; quantity?: number | null; unit?: string | null; notes?: string | null }>;
 }> {
   const prompt = `Extract the full recipe from this ${hint} and return structured JSON.
@@ -44,11 +45,15 @@ Return ONLY valid JSON with this exact shape (no markdown, no explanation):
   "title": string,
   "description": string | null,
   "prepTime": number | null,       // minutes
-  "cookTime": number | null,       // minutes
+  "cookTime": number | null,       // minutes — if not listed but prepTime and totalTime are, compute cookTime = totalTime - prepTime
   "servings": number | null,
   "category": string,              // e.g. Breakfast, Desserts, Main Courses, Salads, Sides, Snacks
-  "tags": string[],                // e.g. ["Quick","Vegetarian"]
-  "instructions": string[],        // one step per element
+  "tags": string[],
+  "calories": number | null,       // kcal per serving
+  "protein": number | null,        // grams per serving
+  "carbs": number | null,          // grams per serving
+  "fats": number | null,           // grams per serving
+  "instructions": string[],
   "ingredients": [
     { "ingredientName": string, "quantity": number | null, "unit": string | null, "notes": string | null }
   ]
@@ -106,33 +111,48 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
     return isNaN(n) ? null : n;
   })();
 
-  // Extract image URL — can be string, string[], or ImageObject / ImageObject[]
+  // Derive cookTime = totalTime - prepTime when cookTime is absent
+  const prepTime = toMins(schema.prepTime);
+  const cookTime = toMins(schema.cookTime) ?? (() => {
+    const total = toMins(schema.totalTime);
+    if (total != null && prepTime != null && total > prepTime) return total - prepTime;
+    return toMins(schema.totalTime); // fall back to totalTime if no prepTime
+  })();
+
+  // Extract image URL — string, string[], ImageObject, or ImageObject[]
   const extractImageUrl = (img: unknown): string | null => {
     if (!img) return null;
     if (typeof img === "string") return img;
     if (Array.isArray(img)) {
-      for (const item of img) {
-        const found = extractImageUrl(item);
-        if (found) return found;
-      }
+      for (const item of img) { const found = extractImageUrl(item); if (found) return found; }
       return null;
     }
-    if (typeof img === "object" && img !== null) {
-      return (img as any).url ?? (img as any).contentUrl ?? null;
-    }
+    if (typeof img === "object" && img !== null) return (img as any).url ?? (img as any).contentUrl ?? null;
     return null;
   };
+
+  // Extract nutrition — Schema.org NutritionInformation stores values as strings like "285 calories"
+  const parseNutritionNum = (v: unknown): number | null => {
+    if (!v) return null;
+    const n = parseFloat(String(v).replace(/[^\d.]/g, ""));
+    return isNaN(n) ? null : n;
+  };
+  const nutr = schema.nutrition as Record<string, unknown> | null | undefined;
 
   return {
     title: String(schema.name ?? "Untitled Recipe"),
     description: schema.description ? String(schema.description) : null,
     imageUrl: extractImageUrl(schema.image),
-    prepTime: toMins(schema.prepTime),
-    cookTime: toMins(schema.cookTime),
+    prepTime,
+    cookTime,
     servings: servings ?? 4,
     category: String((schema.recipeCategory as string) ?? "Uncategorized"),
     tags: Array.isArray(schema.keywords) ? schema.keywords as string[] : schema.keywords ? String(schema.keywords).split(",").map(s => s.trim()) : [],
     instructions: toStringArray(schema.recipeInstructions),
+    calories: parseNutritionNum(nutr?.calories),
+    protein: parseNutritionNum(nutr?.proteinContent),
+    carbs: parseNutritionNum(nutr?.carbohydrateContent),
+    fats: parseNutritionNum(nutr?.fatContent),
     ingredients,
   };
 }
