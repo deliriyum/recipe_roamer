@@ -148,7 +148,14 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
     cookTime,
     servings: servings ?? 4,
     category: String((schema.recipeCategory as string) ?? "Uncategorized"),
-    tags: Array.isArray(schema.keywords) ? schema.keywords as string[] : schema.keywords ? String(schema.keywords).split(",").map(s => s.trim()) : [],
+    tags: (() => {
+      const raw: string[] = Array.isArray(schema.keywords)
+        ? schema.keywords as string[]
+        : schema.keywords ? String(schema.keywords).split(",").map(s => s.trim()) : [];
+      return raw
+        .map(t => t.trim())
+        .filter(t => t.length > 0 && t.length <= 40 && !t.includes(":"));
+    })(),
     instructions: toStringArray(schema.recipeInstructions),
     calories: parseNutritionNum(nutr?.calories),
     protein: parseNutritionNum(nutr?.proteinContent),
@@ -403,6 +410,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Strip prep notes from ingredient names for shopping lists.
+  // Keeps meaningful qualifiers (skim, skinless, low-sodium) but removes
+  // cooking instructions (thinly sliced, seeded, for serving, etc.)
+  function cleanIngredientName(name: string): string {
+    const PREP_VERBS = /sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|cut\b/i;
+    // Remove "for serving / garnish / etc." and everything after
+    let result = name.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling)\b.*/i, "");
+    // Remove comma-separated clauses that are prep instructions
+    result = result.replace(/,\s*((?:(?:thinly|finely|roughly|coarsely|lightly|freshly|evenly)\s+)?\w+(?:ed|ing)\b)[^,]*/gi, (match, word) => {
+      return PREP_VERBS.test(word) ? "" : match;
+    });
+    return result.trim().replace(/,\s*$/, "").trim();
+  }
+
   app.post("/api/shopping-lists/from-recipe", wrap(async (req, res) => {
     const { recipeId, servings } = req.body;
     if (!recipeId) return res.status(400).json({ error: "recipeId required" });
@@ -411,7 +432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
     const items: InsertShoppingListItem[] = recipe.recipeIngredients.map((ing) => ({
-      ingredientName: ing.ingredientName,
+      ingredientName: cleanIngredientName(ing.ingredientName),
       quantity: ing.quantity != null ? Math.ceil(ing.quantity * ratio) : null,
       unit: ing.unit ?? null,
       category: null,
