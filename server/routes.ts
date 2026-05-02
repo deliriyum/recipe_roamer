@@ -111,13 +111,14 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
     return isNaN(n) ? null : n;
   })();
 
-  // Derive cookTime = totalTime - prepTime when cookTime is absent
+  // Derive cookTime = totalTime - prepTime when cookTime is absent or zero (e.g. PT0S)
   const prepTime = toMins(schema.prepTime);
-  const cookTime = toMins(schema.cookTime) ?? (() => {
+  const rawCookTime = toMins(schema.cookTime);
+  const cookTime = (rawCookTime == null || rawCookTime === 0) ? (() => {
     const total = toMins(schema.totalTime);
     if (total != null && prepTime != null && total > prepTime) return total - prepTime;
-    return toMins(schema.totalTime); // fall back to totalTime if no prepTime
-  })();
+    return total ?? null;
+  })() : rawCookTime;
 
   // Extract image URL — string, string[], ImageObject, or ImageObject[]
   const extractImageUrl = (img: unknown): string | null => {
