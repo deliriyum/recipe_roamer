@@ -445,7 +445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Remove "for serving/garnish/topping/etc." and everything after
     let result = name.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling|coating)\b.*/i, "");
     // Split on commas; drop any segment (after the first) that starts with a prep word
-    const PREP_START = /^\s*(thinly|finely|roughly|coarsely|lightly|freshly|evenly|well\s|into\b|cut\b|about\b|sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|drained|rinsed|patted|pitted|deveined|butterflied|deboned|zested|squeezed|stemmed|cored|flaked|pur[ée]ed|mashed|blanched|optional|such\b)/i;
+    const PREP_START = /^\s*(thinly|finely|roughly|coarsely|lightly|freshly|evenly|well\s|into\b|cut\b|about\b|sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|drained|rinsed|patted|pitted|deveined|butterflied|deboned|zested|squeezed|stemmed|cored|flaked|pur[ée]ed|mashed|blanched|divided|at\s+room|room\s+temp|to\s+taste|as\s+needed|if\s+needed|optional|such\b|plus\b|more\b)/i;
     const parts = result.split(",");
     const kept = parts.filter((part, idx) => idx === 0 || !PREP_START.test(part));
     return kept.join(",").trim().replace(/,\s*$/, "").trim();

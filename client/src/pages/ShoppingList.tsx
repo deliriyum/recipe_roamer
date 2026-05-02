@@ -33,7 +33,10 @@ function GenerateDialog({ open, onClose }: GenerateDialogProps) {
   const { toast } = useToast();
   const [selectedPlanId, setSelectedPlanId] = useState("");
 
-  const { data: plans = [] } = useQuery<MealPlan[]>({ queryKey: ["/api/meal-plans"] });
+  const { data: plans = [] } = useQuery<MealPlan[]>({
+    queryKey: ["/api/meal-plans"],
+    staleTime: 0,
+  });
 
   const generateMutation = useMutation({
     mutationFn: async () => {

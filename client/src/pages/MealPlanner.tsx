@@ -305,6 +305,7 @@ export default function MealPlanner() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/meal-plans/week", weekStart] });
+      queryClient.invalidateQueries({ queryKey: ["/api/meal-plans"] });
     },
     onError: () => toast({ title: "Failed to create meal plan", variant: "destructive" }),
   });
