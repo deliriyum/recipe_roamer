@@ -87,19 +87,38 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
   const rawIngs: string[] = Array.isArray(schema.recipeIngredient)
     ? (schema.recipeIngredient as string[])
     : [];
+  // Convert unicode fractions and mixed numbers to decimals before regex parsing
+  const normalizeFractions = (s: string): string => {
+    // Unicode fractions
+    s = s.replace(/[¼½¾⅓⅔⅛⅜⅝⅞]/g, (c) => ({
+      "¼": "0.25", "½": "0.5", "¾": "0.75", "⅓": "0.333", "⅔": "0.667",
+      "⅛": "0.125", "⅜": "0.375", "⅝": "0.625", "⅞": "0.875",
+    }[c] ?? c));
+    // Mixed numbers: "1 1/2" → "1.5"
+    s = s.replace(/\b(\d+)\s+(\d+)\/(\d+)\b/g, (_, w, n, d) => {
+      const dv = parseInt(d);
+      return dv !== 0 ? String(parseFloat(w) + parseInt(n) / dv) : _;
+    });
+    // Simple fractions: "1/2" → "0.5"
+    s = s.replace(/\b(\d+)\/(\d+)\b/g, (_, n, d) => {
+      const dv = parseInt(d);
+      return dv !== 0 ? String(parseInt(n) / dv) : _;
+    });
+    return s;
+  };
+
   const ingredients = rawIngs.map((s) => {
-    const m = s.match(/^([\d¼½¾⅓⅔⅛⅜⅝⅞\/.\s]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
+    const norm = normalizeFractions(s);
+    // Unit regex allows trailing period: c., tbsp., tsp., oz., lb., pkg., etc.
+    const m = norm.match(/^([\d.\s]+)?\s*([a-zA-Z]+\.?)?\s+(.+)$/);
     if (m) {
-      const qStr = m[1]?.trim().replace(/[¼½¾⅓⅔⅛⅜⅝⅞]/g, (c) => ({
-        "¼": "0.25", "½": "0.5", "¾": "0.75", "⅓": "0.333", "⅔": "0.667",
-        "⅛": "0.125", "⅜": "0.375", "⅝": "0.625", "⅞": "0.875",
-      }[c] ?? c));
-      let qty: number | null = null;
-      if (qStr) {
-        if (qStr.includes("/")) { const [n, d] = qStr.split("/").map(Number); qty = n / d; }
-        else qty = parseFloat(qStr) || null;
-      }
-      return { ingredientName: m[3]?.trim() ?? s, quantity: qty, unit: m[2]?.trim() ?? null, notes: null };
+      const qty = m[1] ? (parseFloat(m[1]) || null) : null;
+      return {
+        ingredientName: m[3]?.trim() ?? s,
+        quantity: qty,
+        unit: m[2]?.trim() ?? null,
+        notes: null,
+      };
     }
     return { ingredientName: s, quantity: null, unit: null, notes: null };
   });
