@@ -36,7 +36,7 @@ export default function RecipeDetail() {
       return res.json();
     },
     onSuccess: (list) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists/master"] });
       toast({
         title: "Added to shopping list",
         description: `${recipe!.recipeIngredients.length} ingredients added.`,

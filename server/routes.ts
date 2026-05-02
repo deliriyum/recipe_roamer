@@ -418,6 +418,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(lists);
   });
 
+  app.get("/api/shopping-lists/master", async (_req, res) => {
+    const list = await storage.getOrCreateMasterList();
+    res.json(list);
+  });
+
   app.get("/api/shopping-lists/:id", async (req, res) => {
     const list = await storage.getShoppingListById(req.params.id);
     if (!list) return res.status(404).json({ error: "Shopping list not found" });
@@ -434,17 +439,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Strip prep notes from ingredient names for shopping lists.
-  // Keeps meaningful qualifiers (skim, skinless, low-sodium) but removes
-  // cooking instructions (thinly sliced, seeded, for serving, etc.)
+  // Keeps meaningful qualifiers (skinless, low-sodium, boneless) but removes
+  // cooking instructions (chopped, drained, cut into thirds, for serving, etc.)
   function cleanIngredientName(name: string): string {
-    const PREP_VERBS = /sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|cut\b/i;
-    // Remove "for serving / garnish / etc." and everything after
-    let result = name.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling)\b.*/i, "");
-    // Remove comma-separated clauses that are prep instructions
-    result = result.replace(/,\s*((?:(?:thinly|finely|roughly|coarsely|lightly|freshly|evenly)\s+)?\w+(?:ed|ing)\b)[^,]*/gi, (match, word) => {
-      return PREP_VERBS.test(word) ? "" : match;
-    });
-    return result.trim().replace(/,\s*$/, "").trim();
+    // Remove "for serving/garnish/topping/etc." and everything after
+    let result = name.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling|coating)\b.*/i, "");
+    // Split on commas; drop any segment (after the first) that starts with a prep word
+    const PREP_START = /^\s*(thinly|finely|roughly|coarsely|lightly|freshly|evenly|well\s|into\b|cut\b|about\b|sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|drained|rinsed|patted|pitted|deveined|butterflied|deboned|zested|squeezed|stemmed|cored|flaked|pur[ée]ed|mashed|blanched|optional|such\b)/i;
+    const parts = result.split(",");
+    const kept = parts.filter((part, idx) => idx === 0 || !PREP_START.test(part));
+    return kept.join(",").trim().replace(/,\s*$/, "").trim();
   }
 
   app.post("/api/shopping-lists/from-recipe", wrap(async (req, res) => {
@@ -453,6 +457,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const recipe = await storage.getRecipeById(recipeId);
     if (!recipe) return res.status(404).json({ error: "Recipe not found" });
 
+    const master = await storage.getOrCreateMasterList();
     const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
     const items: InsertShoppingListItem[] = recipe.recipeIngredients.map((ing) => ({
       ingredientName: cleanIngredientName(ing.ingredientName),
@@ -463,13 +468,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       isManual: false,
       sourceRecipeId: recipe.id,
       notes: null,
-      shoppingListId: "",
+      shoppingListId: master.id,
     }));
 
-    const list = await storage.createShoppingListWithItems(
-      { name: recipe.title, mealPlanId: undefined },
-      items
-    );
+    const list = await storage.appendItemsToList(master.id, items);
     res.status(201).json(list);
   }));
 
@@ -489,7 +491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const ratio = ((entry.servingsOverride ?? recipe.servings) / recipe.servings) * servingsMultiplier;
         for (const ing of recipe.recipeIngredients) {
           rawIngredients.push({
-            name: ing.ingredientName,
+            name: cleanIngredientName(ing.ingredientName),
             qty: ing.quantity != null ? ing.quantity * ratio : null,
             unit: ing.unit,
             recipeId: recipe.id,
@@ -520,7 +522,7 @@ Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_
           consolidatedItems = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.ingredients ?? []);
         } catch {
           consolidatedItems = rawIngredients.map((i) => ({
-            ingredient_name: i.name,
+            ingredient_name: cleanIngredientName(i.name),
             quantity: i.qty,
             unit: i.unit,
             category: "other",
@@ -547,14 +549,8 @@ Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_
         };
       });
 
-      const weekLabel = new Date(plan.weekStart).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-      });
-      const list = await storage.createShoppingListWithItems(
-        { mealPlanId, name: `Shopping List – Week of ${weekLabel}` },
-        items
-      );
+      const master = await storage.getOrCreateMasterList();
+      const list = await storage.replaceAutoItems(master.id, items);
 
       res.status(201).json(list);
     } catch (err) {

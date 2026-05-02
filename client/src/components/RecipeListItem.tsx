@@ -36,7 +36,7 @@ export function RecipeListItem({
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists/master"] });
       toast({ title: `${title} added to shopping list` });
     },
     onError: () => {

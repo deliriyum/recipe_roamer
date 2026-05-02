@@ -28,8 +28,11 @@ export interface IStorage {
   // Shopping Lists
   getShoppingLists(): Promise<ShoppingList[]>;
   getShoppingListById(id: string): Promise<ShoppingListWithItems | undefined>;
+  getOrCreateMasterList(): Promise<ShoppingListWithItems>;
   createShoppingList(data: InsertShoppingList): Promise<ShoppingList>;
   createShoppingListWithItems(list: InsertShoppingList, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems>;
+  appendItemsToList(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems>;
+  replaceAutoItems(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems>;
   updateShoppingListItem(listId: string, itemId: string, data: Partial<InsertShoppingListItem>): Promise<ShoppingListItem | undefined>;
   addShoppingListItem(listId: string, data: InsertShoppingListItem): Promise<ShoppingListItem>;
   deleteShoppingListItem(listId: string, itemId: string): Promise<void>;
@@ -229,6 +232,54 @@ export class MemStorage implements IStorage {
     const list = this.shoppingLists.get(id);
     if (!list) return undefined;
     return { ...list, items: this.shoppingListItems.get(id) ?? [] };
+  }
+
+  async getOrCreateMasterList(): Promise<ShoppingListWithItems> {
+    const lists = Array.from(this.shoppingLists.values());
+    let master = lists.find((l) => l.name === "Shopping List") ?? lists[0];
+    if (!master) {
+      master = await this.createShoppingList({ name: "Shopping List" });
+    }
+    return { ...master, items: this.shoppingListItems.get(master.id) ?? [] };
+  }
+
+  async appendItemsToList(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
+    const newItems: ShoppingListItem[] = items.map((item) => ({
+      id: randomUUID(),
+      shoppingListId: listId,
+      ingredientName: item.ingredientName,
+      quantity: item.quantity ?? null,
+      unit: item.unit ?? null,
+      category: item.category ?? null,
+      isChecked: item.isChecked ?? false,
+      isManual: item.isManual ?? false,
+      sourceRecipeId: item.sourceRecipeId ?? null,
+      notes: item.notes ?? null,
+    }));
+    const existing = this.shoppingListItems.get(listId) ?? [];
+    this.shoppingListItems.set(listId, [...existing, ...newItems]);
+    const list = this.shoppingLists.get(listId)!;
+    return { ...list, items: this.shoppingListItems.get(listId) ?? [] };
+  }
+
+  async replaceAutoItems(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
+    const existing = this.shoppingListItems.get(listId) ?? [];
+    const manualItems = existing.filter((i) => i.isManual);
+    const newItems: ShoppingListItem[] = items.map((item) => ({
+      id: randomUUID(),
+      shoppingListId: listId,
+      ingredientName: item.ingredientName,
+      quantity: item.quantity ?? null,
+      unit: item.unit ?? null,
+      category: item.category ?? null,
+      isChecked: item.isChecked ?? false,
+      isManual: false,
+      sourceRecipeId: item.sourceRecipeId ?? null,
+      notes: item.notes ?? null,
+    }));
+    this.shoppingListItems.set(listId, [...manualItems, ...newItems]);
+    const list = this.shoppingLists.get(listId)!;
+    return { ...list, items: this.shoppingListItems.get(listId) ?? [] };
   }
 
   async createShoppingList(data: InsertShoppingList): Promise<ShoppingList> {
