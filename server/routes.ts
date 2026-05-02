@@ -348,11 +348,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const schema = z.object({
         dayOfWeek: z.number().int().min(0).max(6),
         mealSlot: z.enum(["breakfast", "lunch", "dinner", "snack"]),
-        recipeId: z.string().optional(),
-        customMeal: z.string().optional(),
-        servingsOverride: z.number().int().optional(),
+        recipeId: z.string().nullable().optional(),
+        customMeal: z.string().nullable().optional(),
+        servingsOverride: z.number().int().nullable().optional(),
       });
-      const data = schema.parse(req.body);
+      const raw = schema.parse(req.body);
+      const data = {
+        ...raw,
+        recipeId: raw.recipeId ?? undefined,
+        customMeal: raw.customMeal ?? undefined,
+        servingsOverride: raw.servingsOverride ?? undefined,
+      };
       const entry = await storage.addMealPlanEntry(req.params.id, data);
       res.status(201).json(entry);
     } catch (err) {
@@ -397,7 +403,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/shopping-lists/generate", async (req, res) => {
+  app.post("/api/shopping-lists/from-recipe", wrap(async (req, res) => {
+    const { recipeId, servings } = req.body;
+    if (!recipeId) return res.status(400).json({ error: "recipeId required" });
+    const recipe = await storage.getRecipeById(recipeId);
+    if (!recipe) return res.status(404).json({ error: "Recipe not found" });
+
+    const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
+    const items: InsertShoppingListItem[] = recipe.recipeIngredients.map((ing) => ({
+      ingredientName: ing.ingredientName,
+      quantity: ing.quantity != null ? Math.round(ing.quantity * ratio * 100) / 100 : null,
+      unit: ing.unit ?? null,
+      category: null,
+      isChecked: false,
+      isManual: false,
+      sourceRecipeId: recipe.id,
+      notes: null,
+      shoppingListId: "",
+    }));
+
+    const list = await storage.createShoppingListWithItems(
+      { name: recipe.title, mealPlanId: undefined },
+      items
+    );
+    res.status(201).json(list);
+  }));
+
+  app.post("/api/shopping-lists/generate", wrap(async (req, res) => {
     try {
       const { mealPlanId, servingsMultiplier = 1 } = req.body;
       if (!mealPlanId) return res.status(400).json({ error: "mealPlanId required" });
@@ -485,7 +517,7 @@ Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_
       console.error("Shopping list generation error:", err);
       res.status(500).json({ error: String(err) });
     }
-  });
+  }));
 
   app.put("/api/shopping-lists/:id/items/:itemId", async (req, res) => {
     try {

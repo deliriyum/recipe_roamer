@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeft, Share2, Heart, Edit } from "lucide-react";
+import { ArrowLeft, Share2, Heart, Edit, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -9,13 +9,16 @@ import { InstructionsList } from "@/components/InstructionsList";
 import { NutritionPanel } from "@/components/NutritionPanel";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation, useParams } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { RecipeWithIngredients } from "@shared/schema";
 
 export default function RecipeDetail() {
   const [, setLocation] = useLocation();
   const params = useParams<{ id: string }>();
   const [isFavorite, setIsFavorite] = useState(false);
+  const { toast } = useToast();
 
   const { data: recipe, isLoading, error } = useQuery<RecipeWithIngredients>({
     queryKey: ["/api/recipes", params.id],
@@ -23,6 +26,31 @@ export default function RecipeDetail() {
 
   const [servings, setServings] = useState<number | null>(null);
   const currentServings = servings ?? recipe?.servings ?? 4;
+
+  const addToListMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/shopping-lists/from-recipe", {
+        recipeId: recipe!.id,
+        servings: currentServings,
+      });
+      return res.json();
+    },
+    onSuccess: (list) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists"] });
+      toast({
+        title: "Added to shopping list",
+        description: `${recipe!.recipeIngredients.length} ingredients added.`,
+        action: (
+          <Button variant="outline" size="sm" onClick={() => setLocation("/shopping")}>
+            View List
+          </Button>
+        ),
+      });
+    },
+    onError: () => {
+      toast({ title: "Failed to add to shopping list", variant: "destructive" });
+    },
+  });
 
   if (isLoading) {
     return (
@@ -132,7 +160,19 @@ export default function RecipeDetail() {
         </Card>
 
         <Card className="p-6">
-          <h2 className="text-xl font-semibold mb-4">Ingredients</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h2 className="text-xl font-semibold">Ingredients</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => addToListMutation.mutate()}
+              disabled={addToListMutation.isPending || !recipe.recipeIngredients.length}
+              data-testid="button-add-to-shopping-list"
+            >
+              <ShoppingCart className="w-4 h-4 mr-2" />
+              {addToListMutation.isPending ? "Adding…" : "Add to Shopping List"}
+            </Button>
+          </div>
           <IngredientsList
             ingredients={recipe.recipeIngredients}
             originalServings={recipe.servings}

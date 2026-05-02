@@ -40,6 +40,7 @@ export function IngredientsList({ ingredients, originalServings, currentServings
 
   return (
     <div className="space-y-3">
+      <p className="text-xs text-muted-foreground mb-1">Check off ingredients as you cook</p>
       {ingredients.map((ing) => {
         const isChecked = checkedItems.has(ing.id);
         return (
