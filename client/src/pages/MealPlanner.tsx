@@ -183,7 +183,7 @@ function AddMealDialog({ open, onClose, mealPlanId, dayOfWeek, mealSlot, existin
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-sm truncate">{r.title}</p>
-                      {r.cookTime && <p className="text-xs text-muted-foreground">{r.cookTime} min</p>}
+                      {!!r.cookTime && <p className="text-xs text-muted-foreground">{r.cookTime} min</p>}
                     </div>
                   </button>
                 ))
