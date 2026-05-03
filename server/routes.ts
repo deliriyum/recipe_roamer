@@ -474,6 +474,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   function cleanIngredientName(name: string): string {
     // Remove any content inside parentheses (always prep notes), including unclosed parens
     let result = name.replace(/\s*\([^)]*\)?/g, "").trim();
+    // Remove any orphaned closing parens left over (e.g. "soy sauce)")
+    result = result.replace(/\s*\)/g, "").trim();
     // Remove "for serving/garnish/topping/etc." and everything after
     result = result.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling|coating)\b.*/i, "");
     // Split on commas; drop any segment (after the first) that starts with a prep word

@@ -234,15 +234,18 @@ export default function ShoppingList() {
                   {allChecked ? "Deselect All" : "Select All"}
                 </Button>
               )}
-              {checkedItems.length > 0 && (
+              {items.length > 0 && (
                 <Button
                   size="sm"
-                  onClick={() => addToPantryMutation.mutate(checkedItems.map((i) => i.id))}
+                  onClick={() => {
+                    const targets = checkedItems.length > 0 ? checkedItems : items;
+                    addToPantryMutation.mutate(targets.map((i) => i.id));
+                  }}
                   disabled={addToPantryMutation.isPending}
                   data-testid="button-add-all-to-pantry"
                 >
                   <Archive className="w-4 h-4 mr-1" />
-                  Add {checkedItems.length} to Pantry
+                  {checkedItems.length > 0 ? `Add ${checkedItems.length} to Pantry` : "Add All to Pantry"}
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => clearCheckedMutation.mutate()}
