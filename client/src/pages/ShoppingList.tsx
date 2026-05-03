@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShoppingCart, Plus, X, Trash2, RefreshCw, Archive } from "lucide-react";
+import { ShoppingCart, Plus, X, Trash2, RefreshCw, Archive, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { ShoppingListWithItems, ShoppingListItem, MealPlan } from "@shared/schema";
+import type { ShoppingListWithItems, ShoppingListItem, MealPlan, PantryItem } from "@shared/schema";
 
 const CATEGORY_ORDER = ["produce", "dairy", "meat", "seafood", "bakery", "pantry", "frozen", "beverages", "spices", "other"];
 
@@ -114,6 +114,14 @@ export default function ShoppingList() {
     },
   });
 
+  const { data: pantryItems = [] } = useQuery<PantryItem[]>({
+    queryKey: ["/api/pantry"],
+  });
+
+  const pantryNames = new Set(pantryItems.map((p) => p.ingredientName.toLowerCase().trim()));
+
+  const isInPantry = (name: string) => pantryNames.has(name.toLowerCase().trim());
+
   const listId = masterList?.id ?? null;
 
   const invalidateMaster = () => queryClient.invalidateQueries({ queryKey: ["/api/shopping-lists/master"] });
@@ -172,11 +180,18 @@ export default function ShoppingList() {
 
   const addToPantryMutation = useMutation({
     mutationFn: async (itemIds: string[]) => {
-      await apiRequest("POST", "/api/pantry/from-shopping-list", { itemIds, listId });
+      const res = await apiRequest("POST", "/api/pantry/from-shopping-list", { itemIds, listId });
+      return res.json();
     },
-    onSuccess: (_, itemIds) => {
+    onSuccess: (data, itemIds) => {
       invalidateMaster();
-      toast({ title: "Added to pantry!", description: `${itemIds.length} item${itemIds.length !== 1 ? "s" : ""} added to your pantry.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/pantry"] });
+      const added = Array.isArray(data) ? data.length : itemIds.length;
+      const skipped = itemIds.length - (Array.isArray(data) ? data.length : 0);
+      const desc = skipped > 0
+        ? `${added} added, ${skipped} already in pantry.`
+        : `${added} item${added !== 1 ? "s" : ""} added to your pantry.`;
+      toast({ title: "Pantry updated!", description: desc });
     },
     onError: () => toast({ title: "Failed to add to pantry", variant: "destructive" }),
   });
@@ -281,66 +296,81 @@ export default function ShoppingList() {
                   <span className="flex-1 border-t border-border" />
                 </h3>
                 <div className="space-y-2">
-                  {grouped[cat].map((item) => (
-                    <div key={item.id}
-                      className={`flex items-center gap-3 p-3 rounded-md border transition-colors ${item.isChecked ? "opacity-60 bg-muted/50" : "bg-card"}`}
-                      data-testid={`shopping-item-${item.id}`}>
-                      <Checkbox
-                        checked={item.isChecked ?? false}
-                        onCheckedChange={(checked) => checkMutation.mutate({ itemId: item.id, isChecked: !!checked })}
-                        data-testid={`checkbox-item-${item.id}`}
-                      />
-                      {editingItem === item.id ? (
-                        <div className="flex-1 flex gap-2 items-center flex-wrap">
-                          <Input value={editQty} onChange={(e) => setEditQty(e.target.value)}
-                            placeholder="Qty" className="w-16" data-testid="input-edit-qty" />
-                          <Input value={editUnit} onChange={(e) => setEditUnit(e.target.value)}
-                            placeholder="Unit" className="w-20" data-testid="input-edit-unit" />
-                          <Input value={editName} onChange={(e) => setEditName(e.target.value)}
-                            placeholder="Ingredient" className="flex-1 min-w-24" data-testid="input-edit-name" />
-                          <Button size="sm" onClick={() => saveEdit(item.id)} data-testid="button-save-edit">Save</Button>
-                          <Button size="sm" variant="outline" onClick={() => setEditingItem(null)}>Cancel</Button>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex-1 min-w-0" onClick={() => startEdit(item)}>
-                            <p className={`text-sm font-medium cursor-pointer ${item.isChecked ? "line-through" : ""}`}>
-                              {item.quantity != null ? `${item.quantity} ` : ""}
-                              {item.unit ? `${item.unit} ` : ""}
-                              {item.ingredientName}
-                            </p>
-                            {item.notes && (
-                              <p className="text-xs text-muted-foreground">{item.notes}</p>
-                            )}
+                  {grouped[cat].map((item) => {
+                    const inPantry = isInPantry(item.ingredientName);
+                    return (
+                      <div key={item.id}
+                        className={`flex items-center gap-3 p-3 rounded-md border transition-colors ${item.isChecked ? "opacity-60 bg-muted/50" : inPantry ? "bg-primary/5 border-primary/20" : "bg-card"}`}
+                        data-testid={`shopping-item-${item.id}`}>
+                        <Checkbox
+                          checked={item.isChecked ?? false}
+                          onCheckedChange={(checked) => checkMutation.mutate({ itemId: item.id, isChecked: !!checked })}
+                          data-testid={`checkbox-item-${item.id}`}
+                        />
+                        {editingItem === item.id ? (
+                          <div className="flex-1 flex gap-2 items-center flex-wrap">
+                            <Input value={editQty} onChange={(e) => setEditQty(e.target.value)}
+                              placeholder="Qty" className="w-16" data-testid="input-edit-qty" />
+                            <Input value={editUnit} onChange={(e) => setEditUnit(e.target.value)}
+                              placeholder="Unit" className="w-20" data-testid="input-edit-unit" />
+                            <Input value={editName} onChange={(e) => setEditName(e.target.value)}
+                              placeholder="Ingredient" className="flex-1 min-w-24" data-testid="input-edit-name" />
+                            <Button size="sm" onClick={() => saveEdit(item.id)} data-testid="button-save-edit">Save</Button>
+                            <Button size="sm" variant="outline" onClick={() => setEditingItem(null)}>Cancel</Button>
                           </div>
-                          {item.isManual && (
-                            <Badge variant="outline" className="text-[10px] flex-shrink-0">manual</Badge>
-                          )}
-                        </>
-                      )}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => addToPantryMutation.mutate([item.id])}
-                            disabled={addToPantryMutation.isPending}
-                            className="flex-shrink-0 text-muted-foreground"
-                            data-testid={`button-pantry-item-${item.id}`}
-                          >
-                            <Archive className="w-3.5 h-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="left">Add to pantry</TooltipContent>
-                      </Tooltip>
-                      <Button variant="ghost" size="icon"
-                        onClick={() => deleteItemMutation.mutate(item.id)}
-                        className="flex-shrink-0"
-                        data-testid={`button-delete-item-${item.id}`}>
-                        <X className="w-3 h-3" />
-                      </Button>
-                    </div>
-                  ))}
+                        ) : (
+                          <>
+                            <div className="flex-1 min-w-0" onClick={() => startEdit(item)}>
+                              <p className={`text-sm font-medium cursor-pointer ${item.isChecked ? "line-through" : ""}`}>
+                                {item.quantity != null ? `${item.quantity} ` : ""}
+                                {item.unit ? `${item.unit} ` : ""}
+                                {item.ingredientName}
+                              </p>
+                              {item.notes && (
+                                <p className="text-xs text-muted-foreground">{item.notes}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {inPantry && (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="flex items-center" data-testid={`pantry-indicator-${item.id}`}>
+                                      <CheckCircle2 className="w-4 h-4 text-primary" />
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left">In your pantry</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {item.isManual && (
+                                <Badge variant="outline" className="text-[10px]">manual</Badge>
+                              )}
+                            </div>
+                          </>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => addToPantryMutation.mutate([item.id])}
+                              disabled={addToPantryMutation.isPending}
+                              className="flex-shrink-0 text-muted-foreground"
+                              data-testid={`button-pantry-item-${item.id}`}
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="left">Add to pantry</TooltipContent>
+                        </Tooltip>
+                        <Button variant="ghost" size="icon"
+                          onClick={() => deleteItemMutation.mutate(item.id)}
+                          className="flex-shrink-0"
+                          data-testid={`button-delete-item-${item.id}`}>
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}

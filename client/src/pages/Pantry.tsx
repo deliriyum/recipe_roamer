@@ -30,8 +30,6 @@ interface PantryItemFormProps {
 function PantryItemForm({ open, onClose, editItem }: PantryItemFormProps) {
   const { toast } = useToast();
   const [name, setName] = useState(editItem?.ingredientName ?? "");
-  const [quantity, setQuantity] = useState(editItem?.quantity?.toString() ?? "");
-  const [unit, setUnit] = useState(editItem?.unit ?? "");
   const [category, setCategory] = useState(editItem?.category ?? "other");
   const [expiryDate, setExpiryDate] = useState(editItem?.expiryDate ?? "");
 
@@ -68,8 +66,8 @@ function PantryItemForm({ open, onClose, editItem }: PantryItemFormProps) {
     }
     const data = {
       ingredientName: name.trim(),
-      quantity: quantity ? parseFloat(quantity) : null,
-      unit: unit.trim() || null,
+      quantity: null,
+      unit: null,
       category: category || null,
       expiryDate: expiryDate || null,
     };
@@ -81,7 +79,7 @@ function PantryItemForm({ open, onClose, editItem }: PantryItemFormProps) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle className="font-serif">{editItem ? "Edit Item" : "Add to Pantry"}</DialogTitle>
         </DialogHeader>
@@ -89,19 +87,8 @@ function PantryItemForm({ open, onClose, editItem }: PantryItemFormProps) {
           <div>
             <Label htmlFor="pantry-name" className="text-sm font-medium">Ingredient Name</Label>
             <Input id="pantry-name" value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
               placeholder="e.g., flour" className="mt-2" data-testid="input-pantry-name" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="pantry-qty" className="text-sm font-medium">Quantity</Label>
-              <Input id="pantry-qty" type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)}
-                placeholder="e.g., 2" className="mt-2" data-testid="input-pantry-qty" />
-            </div>
-            <div>
-              <Label htmlFor="pantry-unit" className="text-sm font-medium">Unit</Label>
-              <Input id="pantry-unit" value={unit} onChange={(e) => setUnit(e.target.value)}
-                placeholder="e.g., cups" className="mt-2" data-testid="input-pantry-unit" />
-            </div>
           </div>
           <div>
             <Label className="text-sm font-medium">Category</Label>
@@ -226,13 +213,13 @@ export default function Pantry() {
       <main className="max-w-5xl mx-auto px-4 py-6">
         {isLoading ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-28 w-full rounded-md" />)}
+            {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-20 w-full rounded-md" />)}
           </div>
         ) : items.length === 0 ? (
           <div className="text-center py-16 space-y-4">
             <Archive className="w-12 h-12 mx-auto text-muted-foreground/40" />
             <p className="text-muted-foreground">Your pantry is empty.</p>
-            <p className="text-sm text-muted-foreground">Add items manually or check off a shopping list to populate it.</p>
+            <p className="text-sm text-muted-foreground">Add items manually or use the shopping list to populate it.</p>
             <Button onClick={() => setShowForm(true)} data-testid="button-add-first-item">Add First Item</Button>
           </div>
         ) : Object.keys(groupedByCategory).length === 0 ? (
@@ -270,12 +257,7 @@ export default function Pantry() {
                           onClick={() => { setEditItem(item); setShowForm(true); }}
                           data-testid={`button-edit-pantry-${item.id}`}
                         >
-                          <p className="font-medium text-sm leading-tight mb-1 pr-4">{item.ingredientName}</p>
-                          {(item.quantity != null || item.unit) && (
-                            <p className="text-xs text-muted-foreground">
-                              {item.quantity != null ? item.quantity : ""}{item.unit ? ` ${item.unit}` : ""}
-                            </p>
-                          )}
+                          <p className="font-medium text-sm leading-tight pr-4">{item.ingredientName}</p>
                           {item.expiryDate && (
                             <div className={`flex items-center gap-1 mt-2 text-xs ${isExpired ? "text-destructive" : isExpiring ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"}`}>
                               {isExpiring && <AlertTriangle className="w-3 h-3 flex-shrink-0" />}

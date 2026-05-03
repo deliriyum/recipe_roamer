@@ -314,6 +314,10 @@ class DbStorage implements IStorage {
   }
 
   async addPantryItem(data: InsertPantryItem): Promise<PantryItem> {
+    const normalized = data.ingredientName.toLowerCase().trim();
+    const existing = await db.select().from(pantryItems);
+    const dupe = existing.find((i) => i.ingredientName.toLowerCase().trim() === normalized);
+    if (dupe) return dupe;
     const [item] = await db
       .insert(pantryItems)
       .values({ ...data, addedAt: this.now(), updatedAt: this.now() })
@@ -336,9 +340,13 @@ class DbStorage implements IStorage {
 
   async bulkAddPantryItems(items: InsertPantryItem[]): Promise<PantryItem[]> {
     if (items.length === 0) return [];
+    const existing = await db.select().from(pantryItems);
+    const existingNames = new Set(existing.map((i) => i.ingredientName.toLowerCase().trim()));
+    const newItems = items.filter((i) => !existingNames.has(i.ingredientName.toLowerCase().trim()));
+    if (newItems.length === 0) return [];
     const rows = await db
       .insert(pantryItems)
-      .values(items.map((i) => ({ ...i, addedAt: this.now(), updatedAt: this.now() })))
+      .values(newItems.map((i) => ({ ...i, addedAt: this.now(), updatedAt: this.now() })))
       .returning();
     return rows;
   }

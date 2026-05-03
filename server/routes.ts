@@ -703,8 +703,8 @@ Return ONLY a JSON object with an "items" array, no markdown. Each element: { "i
       const added = await storage.bulkAddPantryItems(
         toAdd.map((i) => ({
           ingredientName: i.ingredientName,
-          quantity: i.quantity,
-          unit: i.unit,
+          quantity: null,
+          unit: null,
           category: i.category,
           expiryDate: null,
         }))
