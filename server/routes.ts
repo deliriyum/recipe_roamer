@@ -442,13 +442,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Keeps meaningful qualifiers (skinless, low-sodium, boneless) but removes
   // cooking instructions (chopped, drained, cut into thirds, for serving, etc.)
   function cleanIngredientName(name: string): string {
+    // Remove any content inside parentheses (always prep notes), including unclosed parens
+    let result = name.replace(/\s*\([^)]*\)?/g, "").trim();
     // Remove "for serving/garnish/topping/etc." and everything after
-    let result = name.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling|coating)\b.*/i, "");
+    result = result.replace(/,?\s*for\s+(serving|garnish|topping|dipping|decoration|drizzling|coating)\b.*/i, "");
     // Split on commas; drop any segment (after the first) that starts with a prep word
     const PREP_START = /^\s*(thinly|finely|roughly|coarsely|lightly|freshly|evenly|well\s|into\b|cut\b|about\b|sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|dried|thawed|cooked|roasted|toasted|drained|rinsed|patted|pitted|deveined|butterflied|deboned|zested|squeezed|stemmed|cored|flaked|pur[ée]ed|mashed|blanched|divided|at\s+room|room\s+temp|to\s+taste|as\s+needed|if\s+needed|optional|such\b|plus\b|more\b)/i;
     const parts = result.split(",");
     const kept = parts.filter((part, idx) => idx === 0 || !PREP_START.test(part));
     return kept.join(",").trim().replace(/,\s*$/, "").trim();
+  }
+
+  // Shared AI consolidation helper used by both from-recipe and generate routes
+  async function aiConsolidateItems(
+    rawItems: Array<{ name: string; qty: number | null; unit: string | null }>,
+    pantry: Awaited<ReturnType<typeof storage.getPantryItems>>,
+    listId: string,
+  ): Promise<InsertShoppingListItem[]> {
+    if (rawItems.length === 0) return [];
+
+    let consolidated: Array<{ ingredient_name: string; quantity: number | null; unit: string | null; category: string | null }> = [];
+
+    try {
+      const prompt = `Parse these ingredient strings and consolidate duplicates.
+Return JSON array of: { ingredient_name, quantity, unit, category }.
+Combine identical ingredients (e.g. '2 cups flour' + '1 cup flour' = '3 cups flour'). Normalize units (tbsp→tablespoon, tsp→teaspoon, c→cup, oz→ounce, lb→pound). Categorize each item as one of: produce, dairy, meat, seafood, bakery, pantry, frozen, beverages, spices, other.
+
+Ingredients:
+${rawItems.map((i) => `${i.qty ?? ""} ${i.unit ?? ""} ${i.name}`.trim()).join("\n")}
+
+Return ONLY a JSON object with an "items" array, no markdown. Each element: { "ingredient_name": string, "quantity": number|null, "unit": string|null, "category": string }`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+      });
+      const text = response.choices[0].message.content ?? "{}";
+      const parsed = JSON.parse(text);
+      consolidated = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.ingredients ?? []);
+    } catch {
+      // Fallback: no consolidation, pass items through as-is
+      consolidated = rawItems.map((i) => ({
+        ingredient_name: i.name,
+        quantity: i.qty,
+        unit: i.unit,
+        category: "other",
+      }));
+    }
+
+    return consolidated.map((item) => {
+      const pantryMatch = pantry.find(
+        (p) =>
+          p.ingredientName.toLowerCase() === item.ingredient_name.toLowerCase() &&
+          (p.quantity ?? 0) >= (item.quantity ?? 0),
+      );
+      return {
+        ingredientName: item.ingredient_name,
+        quantity: item.quantity != null ? Math.ceil(item.quantity) : null,
+        unit: item.unit,
+        category: item.category,
+        isChecked: !!pantryMatch,
+        isManual: false,
+        sourceRecipeId: null,
+        notes: pantryMatch ? "In pantry" : null,
+        shoppingListId: listId,
+      };
+    });
   }
 
   app.post("/api/shopping-lists/from-recipe", wrap(async (req, res) => {
@@ -459,104 +519,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     const master = await storage.getOrCreateMasterList();
     const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
-    const items: InsertShoppingListItem[] = recipe.recipeIngredients.map((ing) => ({
-      ingredientName: cleanIngredientName(ing.ingredientName),
-      quantity: ing.quantity != null ? Math.ceil(ing.quantity * ratio) : null,
+
+    // Collect existing auto-items already in the list
+    const existingRaw = master.items
+      .filter((i) => !i.isManual)
+      .map((i) => ({ name: i.ingredientName, qty: i.quantity, unit: i.unit }));
+
+    // Build raw items from this recipe
+    const newRaw = recipe.recipeIngredients.map((ing) => ({
+      name: cleanIngredientName(ing.ingredientName),
+      qty: ing.quantity != null ? ing.quantity * ratio : null,
       unit: ing.unit ?? null,
-      category: null,
-      isChecked: false,
-      isManual: false,
-      sourceRecipeId: recipe.id,
-      notes: null,
-      shoppingListId: master.id,
     }));
 
-    const list = await storage.appendItemsToList(master.id, items);
+    const pantry = await storage.getPantryItems();
+    const consolidated = await aiConsolidateItems([...existingRaw, ...newRaw], pantry, master.id);
+    const list = await storage.replaceAutoItems(master.id, consolidated);
     res.status(201).json(list);
   }));
 
   app.post("/api/shopping-lists/generate", wrap(async (req, res) => {
-    try {
-      const { mealPlanId, servingsMultiplier = 1 } = req.body;
-      if (!mealPlanId) return res.status(400).json({ error: "mealPlanId required" });
+    const { mealPlanId, servingsMultiplier = 1 } = req.body;
+    if (!mealPlanId) return res.status(400).json({ error: "mealPlanId required" });
 
-      const plan = await storage.getMealPlanById(mealPlanId);
-      if (!plan) return res.status(404).json({ error: "Meal plan not found" });
+    const plan = await storage.getMealPlanById(mealPlanId);
+    if (!plan) return res.status(404).json({ error: "Meal plan not found" });
 
-      const rawIngredients: { name: string; qty: number | null; unit: string | null; recipeId: string | null }[] = [];
-
-      for (const entry of plan.entries) {
-        if (!entry.recipe) continue;
-        const recipe = entry.recipe;
-        const ratio = ((entry.servingsOverride ?? recipe.servings) / recipe.servings) * servingsMultiplier;
-        for (const ing of recipe.recipeIngredients) {
-          rawIngredients.push({
-            name: cleanIngredientName(ing.ingredientName),
-            qty: ing.quantity != null ? ing.quantity * ratio : null,
-            unit: ing.unit,
-            recipeId: recipe.id,
-          });
-        }
+    const rawIngredients: { name: string; qty: number | null; unit: string | null }[] = [];
+    for (const entry of plan.entries) {
+      if (!entry.recipe) continue;
+      const recipe = entry.recipe;
+      const ratio = ((entry.servingsOverride ?? recipe.servings) / recipe.servings) * servingsMultiplier;
+      for (const ing of recipe.recipeIngredients) {
+        rawIngredients.push({
+          name: cleanIngredientName(ing.ingredientName),
+          qty: ing.quantity != null ? ing.quantity * ratio : null,
+          unit: ing.unit ?? null,
+        });
       }
-
-      const pantry = await storage.getPantryItems();
-
-      let consolidatedItems: Array<{ ingredient_name: string; quantity: number | null; unit: string | null; category: string | null }> = [];
-
-      if (rawIngredients.length > 0) {
-        try {
-          const prompt = `Parse and consolidate these ingredient strings. Combine duplicates (e.g. 2 cups flour + 1 cup flour = 3 cups flour). Normalize units (tbsp→tablespoon, tsp→teaspoon). Categorize each as one of: produce, dairy, meat, seafood, bakery, pantry, frozen, beverages, spices, other.
-
-Ingredients:
-${rawIngredients.map((i) => `${i.qty ?? ""} ${i.unit ?? ""} ${i.name}`.trim()).join("\n")}
-
-Return ONLY a JSON array, no markdown, no explanation. Each item: { "ingredient_name": string, "quantity": number|null, "unit": string|null, "category": string }`;
-
-          const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [{ role: "user", content: prompt }],
-            response_format: { type: "json_object" },
-          });
-          const text = response.choices[0].message.content ?? "{}";
-          const parsed = JSON.parse(text);
-          consolidatedItems = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.ingredients ?? []);
-        } catch {
-          consolidatedItems = rawIngredients.map((i) => ({
-            ingredient_name: cleanIngredientName(i.name),
-            quantity: i.qty,
-            unit: i.unit,
-            category: "other",
-          }));
-        }
-      }
-
-      const items = consolidatedItems.map((item) => {
-        const pantryMatch = pantry.find(
-          (p) =>
-            p.ingredientName.toLowerCase() === item.ingredient_name.toLowerCase() &&
-            (p.quantity ?? 0) >= (item.quantity ?? 0)
-        );
-        return {
-          ingredientName: item.ingredient_name,
-          quantity: item.quantity != null ? Math.ceil(item.quantity) : null,
-          unit: item.unit,
-          category: item.category,
-          isChecked: !!pantryMatch,
-          isManual: false,
-          sourceRecipeId: null,
-          notes: pantryMatch ? "In pantry" : null,
-          shoppingListId: "",
-        };
-      });
-
-      const master = await storage.getOrCreateMasterList();
-      const list = await storage.replaceAutoItems(master.id, items);
-
-      res.status(201).json(list);
-    } catch (err) {
-      console.error("Shopping list generation error:", err);
-      res.status(500).json({ error: String(err) });
     }
+
+    const master = await storage.getOrCreateMasterList();
+    const pantry = await storage.getPantryItems();
+    const consolidated = await aiConsolidateItems(rawIngredients, pantry, master.id);
+    const list = await storage.replaceAutoItems(master.id, consolidated);
+    res.status(201).json(list);
   }));
 
   app.put("/api/shopping-lists/:id/items/:itemId", async (req, res) => {

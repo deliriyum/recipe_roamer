@@ -237,7 +237,7 @@ export default function ImportRecipe() {
                 >
                   {ocrMutation.isPending ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analyzing Image…</>
-                  ) : "Extract &amp; Import Recipe"}
+                  ) : "Extract & Import Recipe"}
                 </Button>
               )}
               {ocrMutation.isPending && (
