@@ -597,25 +597,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { cleanName: s, qty, unit };
   }
 
+  // Culinary synonym replacements applied inside ingredientKey().
+  // Each entry maps a regex of variant names → the canonical key string.
+  // Order matters: more specific phrases (e.g. "garlic cloves") must come
+  // before shorter words (e.g. "garlic") to avoid partial replacement.
+  const SYNONYM_REPLACEMENTS: Array<[RegExp, string]> = [
+    // Salt family
+    [/\b(kosher|sea|table|fine|coarse|flaky|iodized)\s+salt\b/gi,  "salt"],
+    // Pepper family — match from most specific to least specific
+    [/\b(fresh[- ]?ground|freshly[- ]?ground|cracked|ground)\s+black\s+pepper\b/gi, "black pepper"],
+    [/\bblack\s+pepper(corns?)?\b/gi,                               "black pepper"],
+    [/\bground\s+pepper\b/gi,                                       "black pepper"],
+    [/\b(fresh[- ]?cracked|cracked)\s+pepper\b/gi,                  "black pepper"],
+    // Green onion family (scallions / spring onions / green onions)
+    [/\bspring\s+onions?\b/gi,                                      "green onions"],
+    [/\bscallions?\b/gi,                                            "green onions"],
+    [/\bgreen\s+onion\b/gi,                                         "green onions"],  // singular → plural canonical
+    // Garlic — "garlic cloves" and "fresh garlic" → plain "garlic"
+    [/\bfresh\s+garlic\b/gi,                                        "garlic"],
+    [/\bgarlic\s+cloves?\b/gi,                                      "garlic"],
+    // Capsicum / bell pepper
+    [/\bcapsicums?\b/gi,                                            "bell pepper"],
+    [/\bbell\s+peppers?\b/gi,                                       "bell pepper"],
+    // Courgette / zucchini
+    [/\bcourgettes?\b/gi,                                           "zucchini"],
+    // Aubergine / eggplant
+    [/\baubergines?\b/gi,                                           "eggplant"],
+    // Cilantro / coriander leaves
+    [/\bcoriander\s+lea(?:f|ves)\b/gi,                               "cilantro"],
+    [/\bfresh\s+coriander\b/gi,                                     "cilantro"],
+    // Cornstarch / cornflour
+    [/\bcornflour\b/gi,                                             "cornstarch"],
+    // Stock → broth (preserves qualifier: "chicken stock" → "chicken broth")
+    [/\bstock\b/gi,                                                 "broth"],
+  ];
+
   // Canonical display names for normalized keys (overrides the first-seen raw name)
   const KEY_DISPLAY_NAME: Record<string, string> = {
-    "salt": "Salt",
+    "salt":         "Salt",
     "black pepper": "Black pepper",
     "green onions": "Green onions",
-    "garlic": "Garlic",
-    "olive oil": "Olive oil",
-    "eggs": "Eggs",
+    "garlic":       "Garlic",
+    "olive oil":    "Olive oil",
+    "eggs":         "Eggs",
+    "bell pepper":  "Bell pepper",
+    "zucchini":     "Zucchini",
+    "eggplant":     "Eggplant",
+    "cilantro":     "Cilantro",
+    "cornstarch":   "Cornstarch",
   };
 
   function ingredientKey(cleanName: string): string {
     let k = cleanName.toLowerCase().trim();
-    // Normalize salt variants → single key
-    if (/\bkosher salt\b|\bsea salt\b|\btable salt\b|\bsalt\b/.test(k)) return "salt";
-    // Normalize pepper variants → single key
-    if (/\bblack pepper\b|\bground pepper\b|\bcracked pepper\b|\bfresh[- ]ground pepper\b/.test(k)) return "black pepper";
-    // Normalize scallion → green onions
-    k = k.replace(/\bscallions?\b/, "green onions");
-    return k;
+    // Apply culinary synonym replacements to normalize variants → canonical key
+    for (const [pattern, canonical] of SYNONYM_REPLACEMENTS) {
+      k = k.replace(pattern, canonical);
+    }
+    return k.replace(/\s+/g, " ").trim();
   }
 
   // Shared AI consolidation helper used by both from-recipe and generate routes
