@@ -81,8 +81,28 @@ function schemaOrgToRecipe(schema: Record<string, unknown>) {
   };
   const toStringArray = (v: unknown): string[] => {
     if (!v) return [];
-    if (Array.isArray(v)) return v.map((x) => (typeof x === "object" && x !== null ? (x as any).text ?? String(x) : String(x)));
-    return [String(v)];
+    // Recursively extracts text from HowToStep, HowToSection, or plain strings.
+    // Schema.org recipeInstructions can be:
+    //   - string[]
+    //   - HowToStep[]  { "@type": "HowToStep", "text": "..." }
+    //   - HowToSection[] { "@type": "HowToSection", "itemListElement": [HowToStep, ...] }
+    //   - mixed nesting of the above
+    const extractText = (x: unknown): string[] => {
+      if (typeof x === "string") return x ? [x] : [];
+      if (typeof x === "object" && x !== null) {
+        const obj = x as Record<string, unknown>;
+        // HowToSection — recurse into itemListElement
+        if (Array.isArray(obj.itemListElement)) {
+          return (obj.itemListElement as unknown[]).flatMap(extractText);
+        }
+        // HowToStep — use text, falling back to name
+        const text = obj.text ?? obj.name;
+        if (text) return [String(text)];
+      }
+      return [];
+    };
+    if (Array.isArray(v)) return v.flatMap(extractText).filter(Boolean);
+    return extractText(v).filter(Boolean);
   };
   const rawIngs: string[] = Array.isArray(schema.recipeIngredient)
     ? (schema.recipeIngredient as string[])
