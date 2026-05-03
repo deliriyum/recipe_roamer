@@ -630,21 +630,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     [/\bcornflour\b/gi,                                             "cornstarch"],
     // Stock → broth (preserves qualifier: "chicken stock" → "chicken broth")
     [/\bstock\b/gi,                                                 "broth"],
+    // Cream — heavy whipping cream → heavy cream
+    [/\bheavy\s+whipping\s+cream\b/gi,                              "heavy cream"],
+    [/\bwhipping\s+cream\b/gi,                                      "heavy cream"],
+    // Butter — unsalted butter → butter (salted butter kept separate, see KEY_DISPLAY_NAME)
+    [/\bunsalted\s+butter\b/gi,                                     "butter"],
+    // Milk — whole milk and full-fat milk → milk
+    [/\bwhole\s+milk\b/gi,                                          "milk"],
+    [/\bfull[- ]fat\s+milk\b/gi,                                    "milk"],
   ];
 
   // Canonical display names for normalized keys (overrides the first-seen raw name)
   const KEY_DISPLAY_NAME: Record<string, string> = {
-    "salt":         "Salt",
-    "black pepper": "Black pepper",
-    "green onions": "Green onions",
-    "garlic":       "Garlic",
-    "olive oil":    "Olive oil",
-    "eggs":         "Eggs",
-    "bell pepper":  "Bell pepper",
-    "zucchini":     "Zucchini",
-    "eggplant":     "Eggplant",
-    "cilantro":     "Cilantro",
-    "cornstarch":   "Cornstarch",
+    "salt":          "Salt",
+    "black pepper":  "Black pepper",
+    "green onions":  "Green onions",
+    "garlic":        "Garlic",
+    "olive oil":     "Olive oil",
+    "eggs":          "Eggs",
+    "bell pepper":   "Bell pepper",
+    "zucchini":      "Zucchini",
+    "eggplant":      "Eggplant",
+    "cilantro":      "Cilantro",
+    "cornstarch":    "Cornstarch",
+    "heavy cream":   "Heavy cream",
+    "butter":        "Butter",
+    "salted butter": "Butter (salted)",
+    "milk":          "Milk",
   };
 
   function ingredientKey(cleanName: string): string {
