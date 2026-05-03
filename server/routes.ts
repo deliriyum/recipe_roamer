@@ -6,6 +6,33 @@ import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Prep-descriptor words that should be stripped from ingredient names into notes
+const PREP_WORDS_RE = /,?\s*(thinly|finely|roughly|coarsely|lightly|freshly|evenly|well[\s-]|into\b|cut\b|about\b|sliced|chopped|diced|minced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|julienned|cubed|crumbled|softened|melted|beaten|whisked|thawed|cooked|roasted|toasted|drained|rinsed|patted dry|pitted|deveined|butterflied|deboned|zested|squeezed|stemmed|cored|flaked|pur[ée]ed|mashed|blanched|divided|at room temp\w*|room temp\w*|to taste|as needed|if needed|optional|such as\b|plus more\b|more for\b|for serving\b|for garnish\b|for topping\b|for dipping\b)[^,]*/gi;
+
+function stripPrepIntoNotes(name: string): { cleanName: string; prepNotes: string | null } {
+  const preps: string[] = [];
+  // Capture anything inside parens as prep notes
+  const noParens = name.replace(/\s*\(([^)]*)\)?/g, (_, inner) => {
+    if (inner.trim()) preps.push(inner.trim());
+    return "";
+  }).replace(/\s*\)/g, "").trim();
+  // Capture comma-separated prep segments
+  const parts = noParens.split(",");
+  const kept: string[] = [];
+  parts.forEach((part, idx) => {
+    if (idx === 0) { kept.push(part); return; }
+    if (PREP_WORDS_RE.test(part.trim())) {
+      preps.push(part.trim());
+    } else {
+      kept.push(part);
+    }
+    PREP_WORDS_RE.lastIndex = 0;
+  });
+  const cleanName = kept.join(",").trim().replace(/,\s*$/, "").trim();
+  const prepNotes = preps.length > 0 ? preps.join(", ") : null;
+  return { cleanName, prepNotes };
+}
+
 function parseIngredientStrings(strings: string[]) {
   return strings.map((s) => {
     const match = s.match(/^([\d./\s]+)?\s*([a-zA-Z]+)?\s+(.+)$/);
@@ -20,14 +47,17 @@ function parseIngredientStrings(strings: string[]) {
           qty = parseFloat(qtyStr);
         }
       }
+      const rawName = match[3]?.trim() ?? s;
+      const { cleanName, prepNotes } = stripPrepIntoNotes(rawName);
       return {
-        ingredientName: match[3]?.trim() ?? s,
+        ingredientName: cleanName,
         quantity: qty ?? null,
         unit: match[2]?.trim() ?? null,
-        notes: null,
+        notes: prepNotes,
       };
     }
-    return { ingredientName: s, quantity: null, unit: null, notes: null };
+    const { cleanName, prepNotes } = stripPrepIntoNotes(s);
+    return { ingredientName: cleanName, quantity: null, unit: null, notes: prepNotes };
   });
 }
 
@@ -485,59 +515,226 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return kept.join(",").trim().replace(/,\s*$/, "").trim();
   }
 
+  // ── Server-side ingredient parsing + consolidation ──────────────────────────
+
+  const UNIT_NORMALIZE_MAP: Record<string, string> = {
+    tsp: "teaspoon", tsps: "teaspoon", teaspoons: "teaspoon",
+    tbsp: "tablespoon", tbsps: "tablespoon", tablespoons: "tablespoon",
+    c: "cup", cups: "cup",
+    oz: "ounce", ounces: "ounce",
+    lb: "pound", lbs: "pound", pounds: "pound",
+    g: "gram", grams: "gram",
+    clove: "cloves",
+    sprig: "sprigs", spring: "sprigs", springs: "sprigs",
+    bunch: "bunches", head: "heads", stalk: "stalks",
+  };
+
+  // Match any unit word at the CURRENT start of the string (after qty + prep stripping)
+  const UNIT_WORD_RE = /^(cups?|tablespoons?|tbsps?|teaspoons?|tsps?|ounces?|oz|pounds?|lbs?|grams?|kg|cloves?|cans?|slices?|pieces?|springs?|sprigs?|bunches?|heads?|stalks?|boxes?|ribs?|eggs?|sheets?)\b/i;
+
+  const PREP_WORD_RE = /\b(finely|roughly|thinly|coarsely|freshly|lightly|evenly|reconstituted|minced|chopped|diced|sliced|grated|shredded|peeled|seeded|trimmed|halved|quartered|torn|crushed|pressed|beaten|whisked|thawed|roasted|toasted|drained|rinsed|pitted|zested|stemmed|cored|mashed|blanched|divided|small[ -]diced|medium[ -]diced|large[ -]diced)\b\s*/gi;
+  // Trailing phrases to strip from clean names (e.g. "chicken broken down into parts" → "chicken")
+  const TRAILING_PHRASE_RE = /\s+(broken\s+down[^,]*|cut\s+into[^,]*|such\s+as[^,]*|or\s+more[^,]*)$/i;
+
+  function normalUnit(raw: string | null): string | null {
+    if (!raw) return null;
+    const key = raw.toLowerCase().trim().replace(/s$/, ""); // singularize for lookup
+    const singular = UNIT_NORMALIZE_MAP[key] ?? UNIT_NORMALIZE_MAP[raw.toLowerCase().trim()];
+    if (singular) return singular;
+    // Return pluralized canonical form for count units
+    const u = raw.toLowerCase().trim();
+    if (/^eggs?$/.test(u)) return null; // "eggs" is the ingredient, not a unit
+    return u;
+  }
+
+  // Strip nested parenthetical content iteratively until none remain
+  function stripParens(s: string): string {
+    let result = s;
+    let prev = "";
+    while (prev !== result) {
+      prev = result;
+      result = result.replace(/\([^()]*\)/g, " ");
+    }
+    // Also strip unclosed opening parens and everything after them
+    result = result.replace(/\([^)]*$/, "");
+    // Strip orphaned closing parens
+    result = result.replace(/\)/g, "");
+    return result.replace(/\s+/g, " ").trim();
+  }
+
+  function parseAndClean(rawLine: string): { cleanName: string; qty: number | null; unit: string | null } {
+    let s = rawLine.trim();
+    // 1. Strip trailing "[Recipe]" annotation tags
+    s = s.replace(/\s*\[.*?\]\s*$/, "").trim();
+    // 2. Strip ALL parenthetical content (footnotes, alternatives, prep notes)
+    s = stripParens(s);
+    // 3. Extract leading quantity (supports decimals)
+    let qty: number | null = null;
+    const qtyM = s.match(/^(\d+(?:\.\d+)?)\s*/);
+    if (qtyM) { qty = parseFloat(qtyM[1]); s = s.slice(qtyM[0].length); }
+    // 4. Strip prep/descriptor words BEFORE unit extraction
+    //    This handles cases like "finely minced cloves of garlic" → "cloves of garlic"
+    s = s.replace(PREP_WORD_RE, " ").replace(/\s+/g, " ").trim();
+    // 5. Extract unit word (now at start after prep stripping)
+    let unit: string | null = null;
+    const unitM = s.match(UNIT_WORD_RE);
+    if (unitM) {
+      const u = normalUnit(unitM[0]);
+      if (u !== null) { unit = u; s = s.slice(unitM[0].length).trim(); }
+    }
+    // 6. Remove "of" connector after unit ("cloves of garlic" → "garlic")
+    s = s.replace(/^of\s+/i, "");
+    // 7. Remove "and" at start (artifact of "peeled and diced" → "and onion")
+    s = s.replace(/^and\s+/i, "");
+    // 8. Remove trailing prep phrases (e.g. "broken down into parts", "cut into 1-inch pieces")
+    s = s.replace(TRAILING_PHRASE_RE, "");
+    // 9. Remove "to taste", "for serving", "etc.", trailing qualifiers
+    s = s.replace(/,?\s*(to taste|for serving|for garnish|as needed|optional|etc\.?)\s*$/i, "");
+    // 10. Remove everything after comma (prep info that survived)
+    s = s.replace(/,.*$/, "");
+    // 11. Final whitespace cleanup
+    s = s.replace(/\s+/g, " ").trim();
+    return { cleanName: s, qty, unit };
+  }
+
+  // Canonical display names for normalized keys (overrides the first-seen raw name)
+  const KEY_DISPLAY_NAME: Record<string, string> = {
+    "salt": "Salt",
+    "black pepper": "Black pepper",
+    "green onions": "Green onions",
+    "garlic": "Garlic",
+    "olive oil": "Olive oil",
+    "eggs": "Eggs",
+  };
+
+  function ingredientKey(cleanName: string): string {
+    let k = cleanName.toLowerCase().trim();
+    // Normalize salt variants → single key
+    if (/\bkosher salt\b|\bsea salt\b|\btable salt\b|\bsalt\b/.test(k)) return "salt";
+    // Normalize pepper variants → single key
+    if (/\bblack pepper\b|\bground pepper\b|\bcracked pepper\b|\bfresh[- ]ground pepper\b/.test(k)) return "black pepper";
+    // Normalize scallion → green onions
+    k = k.replace(/\bscallions?\b/, "green onions");
+    return k;
+  }
+
   // Shared AI consolidation helper used by both from-recipe and generate routes
   async function aiConsolidateItems(
-    rawItems: Array<{ name: string; qty: number | null; unit: string | null }>,
+    rawItems: Array<{ name: string; qty: number | null; unit: string | null; recipeName?: string }>,
     pantry: Awaited<ReturnType<typeof storage.getPantryItems>>,
     listId: string,
   ): Promise<InsertShoppingListItem[]> {
     if (rawItems.length === 0) return [];
 
-    let consolidated: Array<{ ingredient_name: string; quantity: number | null; unit: string | null; category: string | null }> = [];
+    const pantryNames = new Set(pantry.map((p) => p.ingredientName.toLowerCase().trim()));
 
-    try {
-      const prompt = `Parse these ingredient strings and consolidate duplicates.
-Return JSON array of: { ingredient_name, quantity, unit, category }.
-Combine identical ingredients (e.g. '2 cups flour' + '1 cup flour' = '3 cups flour'). Normalize units (tbsp→tablespoon, tsp→teaspoon, c→cup, oz→ounce, lb→pound). Categorize each item as one of: produce, dairy, meat, seafood, bakery, pantry, frozen, beverages, spices, other.
-
-Ingredients:
-${rawItems.map((i) => `${i.qty ?? ""} ${i.unit ?? ""} ${i.name}`.trim()).join("\n")}
-
-Return ONLY a JSON object with an "items" array, no markdown. Each element: { "ingredient_name": string, "quantity": number|null, "unit": string|null, "category": string }`;
-
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-      });
-      const text = response.choices[0].message.content ?? "{}";
-      const parsed = JSON.parse(text);
-      consolidated = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.ingredients ?? []);
-    } catch {
-      // Fallback: no consolidation, pass items through as-is
-      consolidated = rawItems.map((i) => ({
-        ingredient_name: i.name,
-        quantity: i.qty,
-        unit: i.unit,
-        category: "other",
-      }));
+    // ── Pass 1: exact-string dedup (handles same recipe appearing N times in a plan) ──
+    const exactDedupMap = new Map<string, { name: string; qty: number | null; recipes: Set<string> }>();
+    for (const item of rawItems) {
+      const key = item.name.toLowerCase().trim();
+      if (exactDedupMap.has(key)) {
+        const ex = exactDedupMap.get(key)!;
+        if (ex.qty !== null && item.qty !== null) ex.qty = Math.round((ex.qty + item.qty) * 100) / 100;
+        else if (item.qty !== null) ex.qty = item.qty;
+        if (item.recipeName) ex.recipes.add(item.recipeName);
+      } else {
+        const recipes = new Set<string>();
+        if (item.recipeName) recipes.add(item.recipeName);
+        exactDedupMap.set(key, { name: item.name, qty: item.qty, recipes });
+      }
     }
 
-    return consolidated.map((item) => {
-      const pantryMatch = pantry.find(
-        (p) =>
-          p.ingredientName.toLowerCase() === item.ingredient_name.toLowerCase() &&
-          (p.quantity ?? 0) >= (item.quantity ?? 0),
-      );
+    // ── Pass 2: server-side semantic consolidation ────────────────────────────
+    // Parse each line → clean name + qty + unit, then group by ingredient key
+    type Consolidated = { cleanName: string; qty: number | null; unit: string | null; recipes: Set<string>; notes: string | null };
+    const consolidationMap = new Map<string, Consolidated>();
+
+    for (const item of exactDedupMap.values()) {
+      // Handle compound "sea salt and fresh cracked pepper to taste" → two items
+      const parts = item.name.split(/\band\b/i).map(p => p.trim()).filter(Boolean);
+      const subItems = parts.length > 1 && /\b(salt|pepper|spice)\b/i.test(item.name) ? parts : [item.name];
+
+      for (const sub of subItems) {
+        const { cleanName, qty, unit } = parseAndClean(sub);
+        if (!cleanName || cleanName.length < 2) continue;
+        const key = ingredientKey(cleanName);
+        if (!key || key.length < 2) continue;
+
+        if (consolidationMap.has(key)) {
+          const ex = consolidationMap.get(key)!;
+          // Sum quantities when units match
+          if (ex.qty !== null && qty !== null && ex.unit === unit) {
+            ex.qty = Math.round((ex.qty + qty) * 100) / 100;
+          } else if (qty !== null && ex.qty === null) {
+            ex.qty = qty; ex.unit = unit;
+          } else if (qty !== null && ex.unit !== unit && ex.qty !== null) {
+            // Incompatible units — add note
+            ex.notes = ex.notes
+              ? `${ex.notes}; plus ${qty} ${unit ?? ""} from another recipe`.trim()
+              : `plus ${qty} ${unit ?? ""} from another recipe`.trim();
+          }
+          item.recipes.forEach(r => ex.recipes.add(r));
+        } else {
+          // Use canonical display name if key has one, otherwise capitalize raw clean name
+          const displayName = KEY_DISPLAY_NAME[key]
+            ?? (cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+          consolidationMap.set(key, {
+            cleanName: displayName,
+            qty,
+            unit,
+            recipes: new Set(item.recipes),
+            notes: null,
+          });
+        }
+      }
+    }
+
+    const serverConsolidated = Array.from(consolidationMap.values());
+    if (serverConsolidated.length === 0) return [];
+
+    // ── Pass 3: Rule-based category assignment ────────────────────────────────
+    // Keyword maps for deterministic, AI-free categorization
+    const CATEGORY_RULES: [string, RegExp][] = [
+      ["meat",      /\b(beef|chicken|pork|lamb|turkey|veal|duck|bison|steak|tenderloin|rib\s?eye|ribeye|prosciutto|bacon|sausage|chorizo|pancetta|salami|pepperoni|lardons?)\b/i],
+      ["seafood",   /\b(fish|salmon|tuna|shrimp|prawn|crab|lobster|clam|mussel|oyster(?!\s+sauce)|scallop|cod|halibut|anchovy|tilapia)\b/i],
+      ["dairy",     /\b(butter|cream|milk|cheese|yogurt|egg|cheddar|parmesan|mozzarella|brie|gouda|ricotta|sour cream|half[- ]and[- ]half)\b/i],
+      ["bakery",    /\b(bread|puff\s+pastry|pastry\s+dough|dough|flour|baguette|croissant|roll|tortilla|pita|naan)\b/i],
+      ["frozen",    /\b(frozen)\b/i],
+      ["beverages", /\b(juice|soda|water|beer|wine|broth|stock|sake|mirin|shaoxing|dry\s+sherry)\b/i],
+      ["spices",    /\b(salt|pepper|cumin|coriander|turmeric|paprika|cayenne|chili|cinnamon|nutmeg|allspice|gochujang|miso|soy\s+sauce|sesame\s+seeds|sesame\s+oil|ginger|bay\s+leaf|cardamom|clove|star\s+anise|oregano|thyme|rosemary|basil|parsley|sage|tarragon|dill|sumac|za.atar|harissa|cornstarch|sugar|vinegar|mustard|curry|caraway|fennel\s+seed)\b/i],
+      ["produce",   /\b(onion|shallot|garlic|carrot|celery|mushroom|portabella|portobello|cremini|porcini|tomato|potato|pepper|zucchini|eggplant|spinach|kale|lettuce|cabbage|broccoli|cauliflower|leek|scallion|green\s+onion|parsley|cilantro|thyme|rosemary|basil|mint|chive|lemon|lime|orange|apple|pear|pineapple|mango|avocado|corn|pea|bean|lentil|artichoke|asparagus|cucumber|radish|beet|bok\s+choy|edamame|ginger|turmeric)\b/i],
+      ["pantry",    /\b(oil|sauce|vinegar|paste|stock|broth|coconut\s+milk|canned|can|jar|bag|rice|noodle|pasta|flour|cornstarch|starch|sugar|honey|syrup|jam|salt|spice|seasoning|bouillon|bread\s+crumbs|panko|cracker|chip|nut|seed|dried|porcini|shiitake|oyster\s+sauce|fish\s+sauce|hoisin|sriracha|worcestershire|soy|tamari|mirin|sake|wine|sherry|beer|broth)\b/i],
+    ];
+
+    function categorizeIngredient(name: string): string {
+      const lower = name.toLowerCase();
+      // Simple plural → singular: strip trailing 's' from words ≥4 chars
+      // e.g. "mushrooms"→"mushroom", "carrots"→"carrot", "eggs"→"egg"
+      const singular = lower.replace(/\b([a-z]{3,})s\b/g, (_, stem) => stem);
+      for (const [cat, re] of CATEGORY_RULES) {
+        if (re.test(lower) || re.test(singular)) return cat;
+      }
+      return "other";
+    }
+
+    // ── Map to shopping list items ─────────────────────────────────────────────
+    return serverConsolidated.map((item) => {
+      const nameKey = item.cleanName.toLowerCase().trim();
+      const inPantry = pantryNames.has(nameKey) || pantryNames.has(ingredientKey(nameKey));
+      const srcList = Array.from(item.recipes);
+      const noteParts: string[] = [];
+      if (srcList.length > 0) noteParts.push(`for: ${srcList.join(", ")}`);
+      if (item.notes) noteParts.push(item.notes);
+      const combinedNotes = noteParts.length > 0 ? noteParts.join(" • ") : null;
       return {
-        ingredientName: item.ingredient_name,
-        quantity: item.quantity != null ? Math.ceil(item.quantity) : null,
-        unit: item.unit,
-        category: item.category,
-        isChecked: !!pantryMatch,
+        ingredientName: item.cleanName,
+        quantity: item.qty,
+        unit: item.unit ?? null,
+        category: categorizeIngredient(item.cleanName),
+        isChecked: inPantry,
         isManual: false,
         sourceRecipeId: null,
-        notes: pantryMatch ? "In pantry" : null,
+        notes: inPantry ? "In pantry" : combinedNotes,
         shoppingListId: listId,
       };
     });
@@ -552,17 +749,28 @@ Return ONLY a JSON object with an "items" array, no markdown. Each element: { "i
     const master = await storage.getOrCreateMasterList();
     const ratio = servings && recipe.servings > 0 ? servings / recipe.servings : 1;
 
-    // Collect existing auto-items already in the list
+    // Collect existing auto-items already in the list — reconstruct as full strings for the AI
     const existingRaw = master.items
       .filter((i) => !i.isManual)
-      .map((i) => ({ name: i.ingredientName, qty: i.quantity, unit: i.unit }));
+      .map((i) => ({
+        name: [i.quantity != null ? i.quantity : "", i.unit ?? "", i.ingredientName]
+          .map(String).map(s => s.trim()).filter(Boolean).join(" "),
+        qty: null as null,
+        unit: null as null,
+        recipeName: undefined as string | undefined,
+      }));
 
-    // Build raw items from this recipe
-    const newRaw = recipe.recipeIngredients.map((ing) => ({
-      name: cleanIngredientName(ing.ingredientName),
-      qty: ing.quantity != null ? ing.quantity * ratio : null,
-      unit: ing.unit ?? null,
-    }));
+    // Reconstruct full ingredient strings (qty scaled) — let AI parse/clean/consolidate
+    const newRaw = recipe.recipeIngredients.map((ing) => {
+      const scaledQty = ing.quantity != null ? Math.round(ing.quantity * ratio * 100) / 100 : null;
+      return {
+        name: [scaledQty != null ? scaledQty : "", ing.unit ?? "", ing.ingredientName]
+          .map(String).map(s => s.trim()).filter(Boolean).join(" "),
+        qty: null as null,
+        unit: null as null,
+        recipeName: recipe.title,
+      };
+    });
 
     const pantry = await storage.getPantryItems();
     const consolidated = await aiConsolidateItems([...existingRaw, ...newRaw], pantry, master.id);
@@ -577,16 +785,20 @@ Return ONLY a JSON object with an "items" array, no markdown. Each element: { "i
     const plan = await storage.getMealPlanById(mealPlanId);
     if (!plan) return res.status(404).json({ error: "Meal plan not found" });
 
-    const rawIngredients: { name: string; qty: number | null; unit: string | null }[] = [];
+    // Reconstruct full ingredient strings (qty scaled) — let AI parse/clean/consolidate
+    const rawIngredients: { name: string; qty: null; unit: null; recipeName: string }[] = [];
     for (const entry of plan.entries) {
       if (!entry.recipe) continue;
       const recipe = entry.recipe;
       const ratio = ((entry.servingsOverride ?? recipe.servings) / recipe.servings) * servingsMultiplier;
       for (const ing of recipe.recipeIngredients) {
+        const scaledQty = ing.quantity != null ? Math.round(ing.quantity * ratio * 100) / 100 : null;
         rawIngredients.push({
-          name: cleanIngredientName(ing.ingredientName),
-          qty: ing.quantity != null ? ing.quantity * ratio : null,
-          unit: ing.unit ?? null,
+          name: [scaledQty != null ? scaledQty : "", ing.unit ?? "", ing.ingredientName]
+            .map(String).map(s => s.trim()).filter(Boolean).join(" "),
+          qty: null,
+          unit: null,
+          recipeName: recipe.title,
         });
       }
     }
