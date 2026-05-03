@@ -236,6 +236,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(502).json({ error: `Could not reach URL: ${String(err)}` }); return;
     }
 
+    // Check for duplicate by URL first
+    const existingByUrl = await storage.findDuplicateRecipe(url);
+    if (existingByUrl) {
+      res.status(409).json({ duplicate: true, recipe: existingByUrl }); return;
+    }
+
     // Try Schema.org JSON-LD first
     const jsonLdRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     for (const match of html.matchAll(jsonLdRe)) {
@@ -245,7 +251,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (data?.["@graph"]) data = (data["@graph"] as any[]).find((d: any) => d["@type"] === "Recipe") ?? null;
         if (data?.["@type"] === "Recipe") {
           const parsed = schemaOrgToRecipe(data);
-          const recipe = await storage.createRecipe(parsed, parsed.ingredients);
+          const dupByTitle = await storage.findDuplicateRecipe(null, parsed.title);
+          if (dupByTitle) { res.status(409).json({ duplicate: true, recipe: dupByTitle }); return; }
+          const recipe = await storage.createRecipe({ ...parsed, sourceUrl: url }, parsed.ingredients);
           res.status(201).json(recipe); return;
         }
       } catch { /* try next block */ }
@@ -266,7 +274,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       .trim();
 
     const parsed = await parseRecipeWithOpenAI(text, "webpage text");
-    const recipe = await storage.createRecipe({ ...parsed, imageUrl: parsed.imageUrl ?? ogImage }, parsed.ingredients ?? []);
+    const dupByTitle = await storage.findDuplicateRecipe(null, parsed.title);
+    if (dupByTitle) { res.status(409).json({ duplicate: true, recipe: dupByTitle }); return; }
+    const recipe = await storage.createRecipe({ ...parsed, sourceUrl: url, imageUrl: parsed.imageUrl ?? ogImage }, parsed.ingredients ?? []);
     res.status(201).json(recipe);
   }));
 

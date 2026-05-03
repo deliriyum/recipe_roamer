@@ -35,9 +35,23 @@ export default function ImportRecipe() {
   const urlMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/import/url", { url });
+      if (res.status === 409) {
+        const data = await res.json();
+        return { __duplicate: true, recipe: data.recipe as RecipeWithIngredients };
+      }
       return res.json() as Promise<RecipeWithIngredients>;
     },
-    onSuccess,
+    onSuccess: (data: any) => {
+      if (data.__duplicate) {
+        setImported(data.recipe);
+        toast({
+          title: "Already in your collection",
+          description: `"${data.recipe.title}" was imported before — showing the existing recipe.`,
+        });
+        return;
+      }
+      onSuccess(data);
+    },
     onError: (err) =>
       toast({ title: "Import failed", description: String(err), variant: "destructive" }),
   });

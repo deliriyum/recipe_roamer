@@ -20,6 +20,7 @@ export interface IStorage {
   // Recipes
   getRecipes(): Promise<RecipeWithIngredients[]>;
   getRecipeById(id: string): Promise<RecipeWithIngredients | undefined>;
+  findDuplicateRecipe(sourceUrl?: string | null, title?: string): Promise<RecipeWithIngredients | undefined>;
   createRecipe(data: InsertRecipe, ingredients?: InsertRecipeIngredient[]): Promise<RecipeWithIngredients>;
   updateRecipe(id: string, data: Partial<InsertRecipe>, ingredients?: InsertRecipeIngredient[]): Promise<RecipeWithIngredients | undefined>;
   deleteRecipe(id: string): Promise<void>;
@@ -77,6 +78,20 @@ class DbStorage implements IStorage {
     const [recipe] = await db.select().from(recipes).where(eq(recipes.id, id));
     if (!recipe) return undefined;
     return this.attachIngredients(recipe);
+  }
+
+  async findDuplicateRecipe(sourceUrl?: string | null, title?: string): Promise<RecipeWithIngredients | undefined> {
+    if (sourceUrl) {
+      const [byUrl] = await db.select().from(recipes).where(eq(recipes.sourceUrl, sourceUrl)).limit(1);
+      if (byUrl) return this.attachIngredients(byUrl);
+    }
+    if (title) {
+      const normalized = title.trim().toLowerCase();
+      const rows = await db.select().from(recipes);
+      const match = rows.find((r) => r.title.trim().toLowerCase() === normalized);
+      if (match) return this.attachIngredients(match);
+    }
+    return undefined;
   }
 
   async createRecipe(data: InsertRecipe, ingredients: InsertRecipeIngredient[] = []): Promise<RecipeWithIngredients> {

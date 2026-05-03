@@ -8,6 +8,7 @@ export const recipes = pgTable("recipes", {
   title: text("title").notNull(),
   description: text("description"),
   imageUrl: text("image_url"),
+  sourceUrl: text("source_url"),
   prepTime: integer("prep_time"),
   cookTime: integer("cook_time"),
   servings: integer("servings").notNull().default(4),

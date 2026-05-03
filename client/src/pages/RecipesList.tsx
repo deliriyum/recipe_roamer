@@ -27,7 +27,7 @@ const TAG_ICONS: Record<string, React.ReactNode> = {
 
 export default function RecipesList() {
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<FilterState>({ ingredients: [], tags: [], maxTime: 120 });
+  const [filters, setFilters] = useState<FilterState>({ ingredients: [], tags: [], maxTime: 480 });
   const [showConverter, setShowConverter] = useState(false);
   const [, setLocation] = useLocation();
 
@@ -163,7 +163,7 @@ export default function RecipesList() {
                 category={tag}
                 recipes={tagRecipes}
                 icon={TAG_ICONS[tag] ?? <Book className="w-5 h-5" />}
-                defaultOpen={Object.keys(groupedByTag).length === 1}
+                defaultOpen={true}
                 onRecipeClick={(id) => setLocation(`/recipe/${id}`)}
               />
             ))}

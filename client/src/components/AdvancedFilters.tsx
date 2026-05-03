@@ -45,7 +45,7 @@ export function AdvancedFilters({ onFilterChange }: AdvancedFiltersProps) {
   const [ingredientInput, setIngredientInput] = useState("");
   const [selectedIngredients, setSelectedIngredients] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [maxTime, setMaxTime] = useState([120]);
+  const [maxTime, setMaxTime] = useState([480]);
 
   const addIngredient = () => {
     if (ingredientInput.trim() && !selectedIngredients.includes(ingredientInput.trim())) {
@@ -79,16 +79,16 @@ export function AdvancedFilters({ onFilterChange }: AdvancedFiltersProps) {
   const clearFilters = () => {
     setSelectedIngredients([]);
     setSelectedTags([]);
-    setMaxTime([120]);
+    setMaxTime([480]);
     onFilterChange({
       ingredients: [],
       tags: [],
-      maxTime: 120,
+      maxTime: 480,
     });
   };
 
   const activeFilterCount =
-    selectedIngredients.length + selectedTags.length + (maxTime[0] < 120 ? 1 : 0);
+    selectedIngredients.length + selectedTags.length + (maxTime[0] < 480 ? 1 : 0);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -174,14 +174,14 @@ export function AdvancedFilters({ onFilterChange }: AdvancedFiltersProps) {
             <Slider
               value={maxTime}
               onValueChange={setMaxTime}
-              max={120}
-              step={5}
+              max={480}
+              step={15}
               className="mt-2"
               data-testid="slider-max-time"
             />
             <div className="flex justify-between text-xs text-muted-foreground mt-2">
               <span>0 min</span>
-              <span>120 min</span>
+              <span>8 hrs</span>
             </div>
           </div>
         </div>

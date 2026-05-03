@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ShoppingCart, Plus, X, Trash2, RefreshCw } from "lucide-react";
+import { ShoppingCart, Plus, X, Trash2, RefreshCw, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -95,49 +96,9 @@ function GenerateDialog({ open, onClose }: GenerateDialogProps) {
   );
 }
 
-interface AddToPantryBannerProps {
-  listId: string;
-  checkedItems: ShoppingListItem[];
-  onDismiss: () => void;
-}
-function AddToPantryBanner({ listId, checkedItems, onDismiss }: AddToPantryBannerProps) {
-  const { toast } = useToast();
-  const addMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", "/api/pantry/from-shopping-list", {
-        itemIds: checkedItems.map((i) => i.id),
-        listId,
-      });
-    },
-    onSuccess: () => {
-      toast({ title: "Added to pantry!", description: `${checkedItems.length} items moved to your pantry.` });
-      onDismiss();
-    },
-    onError: () => toast({ title: "Failed to add to pantry", variant: "destructive" }),
-  });
-
-  return (
-    <div className="sticky bottom-20 mx-4 mb-2 no-print z-30">
-      <Card className="p-4 flex items-center justify-between gap-4 flex-wrap border-primary/30 bg-primary/5">
-        <p className="text-sm font-medium">
-          Add {checkedItems.length} purchased item{checkedItems.length !== 1 ? "s" : ""} to your pantry?
-        </p>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDismiss}>Dismiss</Button>
-          <Button size="sm" onClick={() => addMutation.mutate()} disabled={addMutation.isPending}
-            data-testid="button-add-to-pantry">
-            {addMutation.isPending ? "Adding…" : "Yes, add all checked"}
-          </Button>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 export default function ShoppingList() {
   const { toast } = useToast();
   const [showGenerate, setShowGenerate] = useState(false);
-  const [showPantryBanner, setShowPantryBanner] = useState(false);
   const [newItemText, setNewItemText] = useState("");
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editQty, setEditQty] = useState("");
@@ -162,10 +123,7 @@ export default function ShoppingList() {
       const res = await apiRequest("PUT", `/api/shopping-lists/${listId}/items/${itemId}`, { isChecked });
       return res.json();
     },
-    onSuccess: (_, { isChecked }) => {
-      invalidateMaster();
-      if (isChecked) setShowPantryBanner(true);
-    },
+    onSuccess: () => invalidateMaster(),
   });
 
   const addItemMutation = useMutation({
@@ -202,21 +160,25 @@ export default function ShoppingList() {
     mutationFn: async () => {
       await apiRequest("DELETE", `/api/shopping-lists/${listId}/checked`);
     },
-    onSuccess: () => {
-      invalidateMaster();
-      setShowPantryBanner(false);
-    },
+    onSuccess: () => invalidateMaster(),
   });
 
   const checkAllMutation = useMutation({
     mutationFn: async (isChecked: boolean) => {
       await apiRequest("PUT", `/api/shopping-lists/${listId}/check-all`, { isChecked });
     },
-    onSuccess: (_, isChecked) => {
-      invalidateMaster();
-      if (isChecked) setShowPantryBanner(true);
-      else setShowPantryBanner(false);
+    onSuccess: () => invalidateMaster(),
+  });
+
+  const addToPantryMutation = useMutation({
+    mutationFn: async (itemIds: string[]) => {
+      await apiRequest("POST", "/api/pantry/from-shopping-list", { itemIds, listId });
     },
+    onSuccess: (_, itemIds) => {
+      invalidateMaster();
+      toast({ title: "Added to pantry!", description: `${itemIds.length} item${itemIds.length !== 1 ? "s" : ""} added to your pantry.` });
+    },
+    onError: () => toast({ title: "Failed to add to pantry", variant: "destructive" }),
   });
 
   const items = masterList?.items ?? [];
@@ -248,7 +210,7 @@ export default function ShoppingList() {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-32">
+    <div className="min-h-screen bg-background pb-24">
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b border-border">
         <div className="max-w-3xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -270,6 +232,17 @@ export default function ShoppingList() {
                   data-testid="button-select-all"
                 >
                   {allChecked ? "Deselect All" : "Select All"}
+                </Button>
+              )}
+              {checkedItems.length > 0 && (
+                <Button
+                  size="sm"
+                  onClick={() => addToPantryMutation.mutate(checkedItems.map((i) => i.id))}
+                  disabled={addToPantryMutation.isPending}
+                  data-testid="button-add-all-to-pantry"
+                >
+                  <Archive className="w-4 h-4 mr-1" />
+                  Add {checkedItems.length} to Pantry
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => clearCheckedMutation.mutate()}
@@ -342,6 +315,21 @@ export default function ShoppingList() {
                           )}
                         </>
                       )}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => addToPantryMutation.mutate([item.id])}
+                            disabled={addToPantryMutation.isPending}
+                            className="flex-shrink-0 text-muted-foreground"
+                            data-testid={`button-pantry-item-${item.id}`}
+                          >
+                            <Archive className="w-3.5 h-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="left">Add to pantry</TooltipContent>
+                      </Tooltip>
                       <Button variant="ghost" size="icon"
                         onClick={() => deleteItemMutation.mutate(item.id)}
                         className="flex-shrink-0"
@@ -374,14 +362,6 @@ export default function ShoppingList() {
           </div>
         )}
       </main>
-
-      {showPantryBanner && checkedItems.length > 0 && listId && (
-        <AddToPantryBanner
-          listId={listId}
-          checkedItems={checkedItems}
-          onDismiss={() => setShowPantryBanner(false)}
-        />
-      )}
 
       <GenerateDialog
         open={showGenerate}
