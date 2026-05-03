@@ -9,8 +9,8 @@ A mobile-first recipe collection app with a vintage 1950s cookbook aesthetic.
 | Frontend | React 18 + Vite |
 | Routing | Wouter |
 | Backend | Node.js + Express |
-| Storage | In-memory (MemStorage) |
-| ORM/Schema | Drizzle ORM (schema only, no real DB) |
+| Storage | PostgreSQL (Replit managed) |
+| ORM/Schema | Drizzle ORM + drizzle-kit |
 | Styling | Tailwind CSS + shadcn/ui |
 | Data fetching | TanStack React Query v5 |
 | Forms | React Hook Form + Zod |
@@ -50,7 +50,7 @@ server/
   index.ts       Express app entry
   routes.ts      All API routes (/api/recipes, /api/meal-plans,
                  /api/shopping-lists, /api/pantry)
-  storage.ts     MemStorage implementation (in-memory Maps)
+  storage.ts     DbStorage — Drizzle ORM queries against PostgreSQL
 
 shared/
   schema.ts      Drizzle schema for all tables (type definitions)

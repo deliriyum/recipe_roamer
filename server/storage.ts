@@ -1,4 +1,10 @@
-import { randomUUID } from "crypto";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import { eq, and, ilike, or, sql, inArray } from "drizzle-orm";
+import {
+  recipes, recipeIngredients, mealPlans, mealPlanEntries,
+  shoppingLists, shoppingListItems, pantryItems,
+} from "@shared/schema";
 import type {
   Recipe, InsertRecipe, RecipeIngredient, InsertRecipeIngredient,
   RecipeWithIngredients, MealPlan, InsertMealPlan, MealPlanEntry,
@@ -6,6 +12,9 @@ import type {
   ShoppingListItem, InsertShoppingListItem, ShoppingListWithItems,
   PantryItem, InsertPantryItem,
 } from "@shared/schema";
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool);
 
 export interface IStorage {
   // Recipes
@@ -47,117 +56,83 @@ export interface IStorage {
   bulkAddPantryItems(items: InsertPantryItem[]): Promise<PantryItem[]>;
 }
 
-export class MemStorage implements IStorage {
-  private recipes: Map<string, Recipe> = new Map();
-  private recipeIngredients: Map<string, RecipeIngredient[]> = new Map();
-  private mealPlans: Map<string, MealPlan> = new Map();
-  private mealPlanEntries: Map<string, MealPlanEntry[]> = new Map();
-  private shoppingLists: Map<string, ShoppingList> = new Map();
-  private shoppingListItems: Map<string, ShoppingListItem[]> = new Map();
-  private pantry: Map<string, PantryItem> = new Map();
-
+class DbStorage implements IStorage {
   private now(): string {
     return new Date().toISOString();
   }
 
-  private buildRecipeWithIngredients(recipe: Recipe): RecipeWithIngredients {
-    return {
-      ...recipe,
-      recipeIngredients: this.recipeIngredients.get(recipe.id) ?? [],
-    };
+  // ── Recipes ───────────────────────────────────────────────────────────────
+
+  private async attachIngredients(recipe: Recipe): Promise<RecipeWithIngredients> {
+    const ings = await db.select().from(recipeIngredients).where(eq(recipeIngredients.recipeId, recipe.id));
+    return { ...recipe, recipeIngredients: ings };
   }
 
   async getRecipes(): Promise<RecipeWithIngredients[]> {
-    return Array.from(this.recipes.values()).map((r) => this.buildRecipeWithIngredients(r));
+    const rows = await db.select().from(recipes);
+    return Promise.all(rows.map((r) => this.attachIngredients(r)));
   }
 
   async getRecipeById(id: string): Promise<RecipeWithIngredients | undefined> {
-    const recipe = this.recipes.get(id);
+    const [recipe] = await db.select().from(recipes).where(eq(recipes.id, id));
     if (!recipe) return undefined;
-    return this.buildRecipeWithIngredients(recipe);
+    return this.attachIngredients(recipe);
   }
 
-  async createRecipe(data: InsertRecipe, ingredients?: InsertRecipeIngredient[]): Promise<RecipeWithIngredients> {
-    const id = randomUUID();
-    const recipe: Recipe = {
-      id,
-      title: data.title,
-      description: data.description ?? null,
-      imageUrl: data.imageUrl ?? null,
-      prepTime: data.prepTime ?? null,
-      cookTime: data.cookTime ?? null,
-      servings: data.servings ?? 4,
-      instructions: data.instructions ?? [],
-      category: data.category ?? "Uncategorized",
-      tags: data.tags ?? null,
-      calories: data.calories ?? null,
-      protein: data.protein ?? null,
-      carbs: data.carbs ?? null,
-      fats: data.fats ?? null,
-    };
-    this.recipes.set(id, recipe);
-
-    const recipeIngredientList: RecipeIngredient[] = (ingredients ?? []).map((ing) => ({
-      id: randomUUID(),
-      recipeId: id,
-      ingredientName: ing.ingredientName,
-      quantity: ing.quantity ?? null,
-      unit: ing.unit ?? null,
-      notes: ing.notes ?? null,
-    }));
-    this.recipeIngredients.set(id, recipeIngredientList);
-
-    return this.buildRecipeWithIngredients(recipe);
+  async createRecipe(data: InsertRecipe, ingredients: InsertRecipeIngredient[] = []): Promise<RecipeWithIngredients> {
+    const [recipe] = await db.insert(recipes).values(data).returning();
+    if (ingredients.length > 0) {
+      await db.insert(recipeIngredients).values(
+        ingredients.map((ing) => ({ ...ing, recipeId: recipe.id }))
+      );
+    }
+    return this.attachIngredients(recipe);
   }
 
   async updateRecipe(id: string, data: Partial<InsertRecipe>, ingredients?: InsertRecipeIngredient[]): Promise<RecipeWithIngredients | undefined> {
-    const existing = this.recipes.get(id);
-    if (!existing) return undefined;
-    const updated: Recipe = { ...existing, ...data };
-    this.recipes.set(id, updated);
+    const [recipe] = await db.update(recipes).set(data).where(eq(recipes.id, id)).returning();
+    if (!recipe) return undefined;
     if (ingredients !== undefined) {
-      const list: RecipeIngredient[] = ingredients.map((ing) => ({
-        id: randomUUID(),
-        recipeId: id,
-        ingredientName: ing.ingredientName,
-        quantity: ing.quantity ?? null,
-        unit: ing.unit ?? null,
-        notes: ing.notes ?? null,
-      }));
-      this.recipeIngredients.set(id, list);
+      await db.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, id));
+      if (ingredients.length > 0) {
+        await db.insert(recipeIngredients).values(
+          ingredients.map((ing) => ({ ...ing, recipeId: id }))
+        );
+      }
     }
-    return this.buildRecipeWithIngredients(updated);
+    return this.attachIngredients(recipe);
   }
 
   async deleteRecipe(id: string): Promise<void> {
-    this.recipes.delete(id);
-    this.recipeIngredients.delete(id);
+    await db.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, id));
+    await db.delete(recipes).where(eq(recipes.id, id));
   }
 
   async searchRecipes(query: string): Promise<RecipeWithIngredients[]> {
-    const q = query.toLowerCase();
-    return Array.from(this.recipes.values())
-      .filter((r) => {
-        const ingredientNames = (this.recipeIngredients.get(r.id) ?? [])
-          .map((i) => i.ingredientName.toLowerCase());
-        return (
-          r.title.toLowerCase().includes(q) ||
-          (r.category ?? "").toLowerCase().includes(q) ||
-          (r.tags ?? []).some((t) => t.toLowerCase().includes(q)) ||
-          ingredientNames.some((n) => n.includes(q))
-        );
-      })
-      .map((r) => this.buildRecipeWithIngredients(r));
+    const q = `%${query}%`;
+    const matchingIngredientRecipeIds = await db
+      .selectDistinct({ recipeId: recipeIngredients.recipeId })
+      .from(recipeIngredients)
+      .where(ilike(recipeIngredients.ingredientName, q));
+    const ingredientRecipeIds = matchingIngredientRecipeIds.map((r) => r.recipeId);
+
+    const conditions = [ilike(recipes.title, q), ilike(recipes.category, q)];
+    if (ingredientRecipeIds.length > 0) {
+      conditions.push(inArray(recipes.id, ingredientRecipeIds));
+    }
+
+    const rows = await db.select().from(recipes).where(or(...conditions));
+    return Promise.all(rows.map((r) => this.attachIngredients(r)));
   }
 
-  async getMealPlans(): Promise<MealPlan[]> {
-    return Array.from(this.mealPlans.values()).sort(
-      (a, b) => new Date(b.weekStart).getTime() - new Date(a.weekStart).getTime()
-    );
-  }
+  // ── Meal Plans ────────────────────────────────────────────────────────────
 
   private async buildMealPlanWithEntries(plan: MealPlan): Promise<MealPlanWithEntries> {
-    const entries = this.mealPlanEntries.get(plan.id) ?? [];
+    const entries = await db
+      .select()
+      .from(mealPlanEntries)
+      .where(eq(mealPlanEntries.mealPlanId, plan.id));
+
     const enriched = await Promise.all(
       entries.map(async (entry) => {
         const recipe = entry.recipeId ? await this.getRecipeById(entry.recipeId) : undefined;
@@ -167,233 +142,191 @@ export class MemStorage implements IStorage {
     return { ...plan, entries: enriched };
   }
 
+  async getMealPlans(): Promise<MealPlan[]> {
+    return db.select().from(mealPlans).orderBy(sql`${mealPlans.weekStart} DESC`);
+  }
+
   async getMealPlanById(id: string): Promise<MealPlanWithEntries | undefined> {
-    const plan = this.mealPlans.get(id);
+    const [plan] = await db.select().from(mealPlans).where(eq(mealPlans.id, id));
     if (!plan) return undefined;
     return this.buildMealPlanWithEntries(plan);
   }
 
   async getMealPlanByWeek(weekStart: string): Promise<MealPlanWithEntries | undefined> {
-    const plan = Array.from(this.mealPlans.values()).find((p) => p.weekStart === weekStart);
+    const [plan] = await db.select().from(mealPlans).where(eq(mealPlans.weekStart, weekStart));
     if (!plan) return undefined;
     return this.buildMealPlanWithEntries(plan);
   }
 
   async createMealPlan(data: InsertMealPlan): Promise<MealPlan> {
-    const id = randomUUID();
-    const plan: MealPlan = {
-      id,
-      weekStart: data.weekStart,
-      createdAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.mealPlans.set(id, plan);
-    this.mealPlanEntries.set(id, []);
+    const [plan] = await db
+      .insert(mealPlans)
+      .values({ ...data, createdAt: this.now(), updatedAt: this.now() })
+      .returning();
     return plan;
   }
 
   async addMealPlanEntry(mealPlanId: string, data: InsertMealPlanEntry): Promise<MealPlanEntry> {
-    const entry: MealPlanEntry = {
-      id: randomUUID(),
-      mealPlanId,
-      dayOfWeek: data.dayOfWeek,
-      mealSlot: data.mealSlot,
-      recipeId: data.recipeId ?? null,
-      customMeal: data.customMeal ?? null,
-      servingsOverride: data.servingsOverride ?? null,
-    };
-    const entries = this.mealPlanEntries.get(mealPlanId) ?? [];
-    entries.push(entry);
-    this.mealPlanEntries.set(mealPlanId, entries);
+    const [entry] = await db
+      .insert(mealPlanEntries)
+      .values({ ...data, mealPlanId })
+      .returning();
     return entry;
   }
 
   async updateMealPlanEntry(mealPlanId: string, entryId: string, data: Partial<InsertMealPlanEntry>): Promise<MealPlanEntry | undefined> {
-    const entries = this.mealPlanEntries.get(mealPlanId) ?? [];
-    const idx = entries.findIndex((e) => e.id === entryId);
-    if (idx === -1) return undefined;
-    entries[idx] = { ...entries[idx], ...data };
-    this.mealPlanEntries.set(mealPlanId, entries);
-    return entries[idx];
+    const [entry] = await db
+      .update(mealPlanEntries)
+      .set(data)
+      .where(and(eq(mealPlanEntries.id, entryId), eq(mealPlanEntries.mealPlanId, mealPlanId)))
+      .returning();
+    return entry ?? undefined;
   }
 
   async deleteMealPlanEntry(mealPlanId: string, entryId: string): Promise<void> {
-    const entries = this.mealPlanEntries.get(mealPlanId) ?? [];
-    this.mealPlanEntries.set(mealPlanId, entries.filter((e) => e.id !== entryId));
+    await db
+      .delete(mealPlanEntries)
+      .where(and(eq(mealPlanEntries.id, entryId), eq(mealPlanEntries.mealPlanId, mealPlanId)));
+  }
+
+  // ── Shopping Lists ────────────────────────────────────────────────────────
+
+  private async attachItems(list: ShoppingList): Promise<ShoppingListWithItems> {
+    const items = await db
+      .select()
+      .from(shoppingListItems)
+      .where(eq(shoppingListItems.shoppingListId, list.id));
+    return { ...list, items };
   }
 
   async getShoppingLists(): Promise<ShoppingList[]> {
-    return Array.from(this.shoppingLists.values()).sort(
-      (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
-    );
+    return db.select().from(shoppingLists).orderBy(sql`${shoppingLists.createdAt} DESC`);
   }
 
   async getShoppingListById(id: string): Promise<ShoppingListWithItems | undefined> {
-    const list = this.shoppingLists.get(id);
+    const [list] = await db.select().from(shoppingLists).where(eq(shoppingLists.id, id));
     if (!list) return undefined;
-    return { ...list, items: this.shoppingListItems.get(id) ?? [] };
+    return this.attachItems(list);
   }
 
   async getOrCreateMasterList(): Promise<ShoppingListWithItems> {
-    const lists = Array.from(this.shoppingLists.values());
-    let master = lists.find((l) => l.name === "Shopping List") ?? lists[0];
-    if (!master) {
-      master = await this.createShoppingList({ name: "Shopping List" });
-    }
-    return { ...master, items: this.shoppingListItems.get(master.id) ?? [] };
-  }
-
-  async appendItemsToList(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
-    const newItems: ShoppingListItem[] = items.map((item) => ({
-      id: randomUUID(),
-      shoppingListId: listId,
-      ingredientName: item.ingredientName,
-      quantity: item.quantity ?? null,
-      unit: item.unit ?? null,
-      category: item.category ?? null,
-      isChecked: item.isChecked ?? false,
-      isManual: item.isManual ?? false,
-      sourceRecipeId: item.sourceRecipeId ?? null,
-      notes: item.notes ?? null,
-    }));
-    const existing = this.shoppingListItems.get(listId) ?? [];
-    this.shoppingListItems.set(listId, [...existing, ...newItems]);
-    const list = this.shoppingLists.get(listId)!;
-    return { ...list, items: this.shoppingListItems.get(listId) ?? [] };
-  }
-
-  async replaceAutoItems(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
-    const existing = this.shoppingListItems.get(listId) ?? [];
-    const manualItems = existing.filter((i) => i.isManual);
-    const newItems: ShoppingListItem[] = items.map((item) => ({
-      id: randomUUID(),
-      shoppingListId: listId,
-      ingredientName: item.ingredientName,
-      quantity: item.quantity ?? null,
-      unit: item.unit ?? null,
-      category: item.category ?? null,
-      isChecked: item.isChecked ?? false,
-      isManual: false,
-      sourceRecipeId: item.sourceRecipeId ?? null,
-      notes: item.notes ?? null,
-    }));
-    this.shoppingListItems.set(listId, [...manualItems, ...newItems]);
-    const list = this.shoppingLists.get(listId)!;
-    return { ...list, items: this.shoppingListItems.get(listId) ?? [] };
+    const [existing] = await db
+      .select()
+      .from(shoppingLists)
+      .where(eq(shoppingLists.name, "Shopping List"))
+      .limit(1);
+    if (existing) return this.attachItems(existing);
+    return this.createShoppingList({ name: "Shopping List" }).then((l) => this.attachItems(l));
   }
 
   async createShoppingList(data: InsertShoppingList): Promise<ShoppingList> {
-    const id = randomUUID();
-    const list: ShoppingList = {
-      id,
-      mealPlanId: data.mealPlanId ?? null,
-      name: data.name ?? "Shopping List",
-      createdAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.shoppingLists.set(id, list);
-    this.shoppingListItems.set(id, []);
+    const [list] = await db
+      .insert(shoppingLists)
+      .values({ ...data, createdAt: this.now(), updatedAt: this.now() })
+      .returning();
     return list;
   }
 
   async createShoppingListWithItems(listData: InsertShoppingList, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
     const list = await this.createShoppingList(listData);
-    const createdItems: ShoppingListItem[] = items.map((item) => ({
-      id: randomUUID(),
-      shoppingListId: list.id,
-      ingredientName: item.ingredientName,
-      quantity: item.quantity ?? null,
-      unit: item.unit ?? null,
-      category: item.category ?? null,
-      isChecked: item.isChecked ?? false,
-      isManual: item.isManual ?? false,
-      sourceRecipeId: item.sourceRecipeId ?? null,
-      notes: item.notes ?? null,
-    }));
-    this.shoppingListItems.set(list.id, createdItems);
-    return { ...list, items: createdItems };
+    if (items.length > 0) {
+      await db.insert(shoppingListItems).values(items.map((i) => ({ ...i, shoppingListId: list.id })));
+    }
+    return this.attachItems(list);
+  }
+
+  async appendItemsToList(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
+    if (items.length > 0) {
+      await db.insert(shoppingListItems).values(items.map((i) => ({ ...i, shoppingListId: listId })));
+    }
+    const [list] = await db.select().from(shoppingLists).where(eq(shoppingLists.id, listId));
+    return this.attachItems(list);
+  }
+
+  async replaceAutoItems(listId: string, items: InsertShoppingListItem[]): Promise<ShoppingListWithItems> {
+    await db
+      .delete(shoppingListItems)
+      .where(and(eq(shoppingListItems.shoppingListId, listId), eq(shoppingListItems.isManual, false)));
+    if (items.length > 0) {
+      await db.insert(shoppingListItems).values(
+        items.map((i) => ({ ...i, shoppingListId: listId, isManual: false }))
+      );
+    }
+    const [list] = await db.select().from(shoppingLists).where(eq(shoppingLists.id, listId));
+    return this.attachItems(list);
   }
 
   async updateShoppingListItem(listId: string, itemId: string, data: Partial<InsertShoppingListItem>): Promise<ShoppingListItem | undefined> {
-    const items = this.shoppingListItems.get(listId) ?? [];
-    const idx = items.findIndex((i) => i.id === itemId);
-    if (idx === -1) return undefined;
-    items[idx] = { ...items[idx], ...data };
-    this.shoppingListItems.set(listId, items);
-    return items[idx];
+    const [item] = await db
+      .update(shoppingListItems)
+      .set(data)
+      .where(and(eq(shoppingListItems.id, itemId), eq(shoppingListItems.shoppingListId, listId)))
+      .returning();
+    return item ?? undefined;
   }
 
   async addShoppingListItem(listId: string, data: InsertShoppingListItem): Promise<ShoppingListItem> {
-    const item: ShoppingListItem = {
-      id: randomUUID(),
-      shoppingListId: listId,
-      ingredientName: data.ingredientName,
-      quantity: data.quantity ?? null,
-      unit: data.unit ?? null,
-      category: data.category ?? null,
-      isChecked: data.isChecked ?? false,
-      isManual: data.isManual ?? true,
-      sourceRecipeId: data.sourceRecipeId ?? null,
-      notes: data.notes ?? null,
-    };
-    const items = this.shoppingListItems.get(listId) ?? [];
-    items.push(item);
-    this.shoppingListItems.set(listId, items);
+    const [item] = await db
+      .insert(shoppingListItems)
+      .values({ ...data, shoppingListId: listId })
+      .returning();
     return item;
   }
 
   async deleteShoppingListItem(listId: string, itemId: string): Promise<void> {
-    const items = this.shoppingListItems.get(listId) ?? [];
-    this.shoppingListItems.set(listId, items.filter((i) => i.id !== itemId));
+    await db
+      .delete(shoppingListItems)
+      .where(and(eq(shoppingListItems.id, itemId), eq(shoppingListItems.shoppingListId, listId)));
   }
 
   async clearCheckedItems(listId: string): Promise<void> {
-    const items = this.shoppingListItems.get(listId) ?? [];
-    this.shoppingListItems.set(listId, items.filter((i) => !i.isChecked));
+    await db
+      .delete(shoppingListItems)
+      .where(and(eq(shoppingListItems.shoppingListId, listId), eq(shoppingListItems.isChecked, true)));
   }
 
   async checkAllItems(listId: string, isChecked: boolean): Promise<void> {
-    const items = this.shoppingListItems.get(listId) ?? [];
-    this.shoppingListItems.set(listId, items.map((i) => ({ ...i, isChecked })));
+    await db
+      .update(shoppingListItems)
+      .set({ isChecked })
+      .where(eq(shoppingListItems.shoppingListId, listId));
   }
 
+  // ── Pantry ────────────────────────────────────────────────────────────────
+
   async getPantryItems(): Promise<PantryItem[]> {
-    return Array.from(this.pantry.values()).sort((a, b) =>
-      a.ingredientName.localeCompare(b.ingredientName)
-    );
+    return db.select().from(pantryItems).orderBy(pantryItems.ingredientName);
   }
 
   async addPantryItem(data: InsertPantryItem): Promise<PantryItem> {
-    const id = randomUUID();
-    const item: PantryItem = {
-      id,
-      ingredientName: data.ingredientName,
-      quantity: data.quantity ?? null,
-      unit: data.unit ?? null,
-      category: data.category ?? null,
-      expiryDate: data.expiryDate ?? null,
-      addedAt: this.now(),
-      updatedAt: this.now(),
-    };
-    this.pantry.set(id, item);
+    const [item] = await db
+      .insert(pantryItems)
+      .values({ ...data, addedAt: this.now(), updatedAt: this.now() })
+      .returning();
     return item;
   }
 
   async updatePantryItem(id: string, data: Partial<InsertPantryItem>): Promise<PantryItem | undefined> {
-    const existing = this.pantry.get(id);
-    if (!existing) return undefined;
-    const updated: PantryItem = { ...existing, ...data, updatedAt: this.now() };
-    this.pantry.set(id, updated);
-    return updated;
+    const [item] = await db
+      .update(pantryItems)
+      .set({ ...data, updatedAt: this.now() })
+      .where(eq(pantryItems.id, id))
+      .returning();
+    return item ?? undefined;
   }
 
   async deletePantryItem(id: string): Promise<void> {
-    this.pantry.delete(id);
+    await db.delete(pantryItems).where(eq(pantryItems.id, id));
   }
 
   async bulkAddPantryItems(items: InsertPantryItem[]): Promise<PantryItem[]> {
-    return Promise.all(items.map((item) => this.addPantryItem(item)));
+    if (items.length === 0) return [];
+    const rows = await db
+      .insert(pantryItems)
+      .values(items.map((i) => ({ ...i, addedAt: this.now(), updatedAt: this.now() })))
+      .returning();
+    return rows;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DbStorage();
